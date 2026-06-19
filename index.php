@@ -38,19 +38,22 @@ function ccIntegrationStatus(array $integration): string
 
 function ccIntegrationPromptTokens(string $integrationId): array
 {
-    if ($integrationId === 'sunhelm_survival') {
-        return [
+    if ($integrationId === 'sunhelm_survival' || $integrationId === 'starfrost_survival') {
+        $tokens = [
             '{subject}',
             '{summary}',
             '{hunger_level}',
             '{hunger_description}',
-            '{thirst_level}',
-            '{thirst_description}',
-            '{exhaustion_level}',
-            '{exhaustion_description}',
-            '{cold_level}',
-            '{cold_description}',
         ];
+        if ($integrationId === 'sunhelm_survival') {
+            $tokens[] = '{thirst_level}';
+            $tokens[] = '{thirst_description}';
+        }
+        $tokens[] = '{exhaustion_level}';
+        $tokens[] = '{exhaustion_description}';
+        $tokens[] = '{cold_level}';
+        $tokens[] = '{cold_description}';
+        return $tokens;
     }
 
     return [
@@ -65,6 +68,19 @@ function ccIntegrationPromptTokens(string $integrationId): array
 
 function ccIntegrationSampleValues(string $integrationId): array
 {
+    if ($integrationId === 'starfrost_survival') {
+        return [
+            'subject' => 'Rangroo',
+            'summary' => 'hungry, very tired, and very cold',
+            'hunger_level' => '1',
+            'hunger_description' => 'hungry',
+            'exhaustion_level' => '4',
+            'exhaustion_description' => 'very tired',
+            'cold_level' => '4',
+            'cold_description' => 'very cold',
+        ];
+    }
+
     if ($integrationId === 'sunhelm_survival') {
         return [
             'subject' => 'Rangroo',
@@ -92,7 +108,7 @@ function ccIntegrationSampleValues(string $integrationId): array
 
 function ccIntegrationSampleTemplate(string $integrationId): string
 {
-    if ($integrationId === 'sunhelm_survival') {
+    if ($integrationId === 'sunhelm_survival' || $integrationId === 'starfrost_survival') {
         return '{subject} is {summary}.';
     }
 
@@ -101,6 +117,10 @@ function ccIntegrationSampleTemplate(string $integrationId): string
 
 function ccIntegrationDefaultOutput(string $integrationId): string
 {
+    if ($integrationId === 'starfrost_survival') {
+        return 'Rangroo is hungry, very tired, and very cold.';
+    }
+
     if ($integrationId === 'sunhelm_survival') {
         return 'Rangroo is hungry, parched, weary, and cold.';
     }

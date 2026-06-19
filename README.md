@@ -7,18 +7,24 @@ This package is split into two pieces:
 - HerikaServer plugin files in this folder. These install into `HerikaServer/ext/CHIM-Custom`.
 - Skyrim SKSE plugin source under `SkyrimPlugin/`. This builds `CHIMCustom.dll`.
 
-The first supported integration is Dirt and Blood - Dynamic Visual Effects. It is optional: if `Dirt and Blood - Dynamic Visuals.esp` is not loaded, `CHIMCustom.dll` silently skips it.
+Supported integrations:
+
+- Dirt and Blood - Dynamic Visual Effects: player dirt, blood, clean, and washing state.
+- SunHelm Survival: player hunger, thirst, exhaustion, and cold state.
+- Starfrost - A Survival Overhaul: player hunger, exhaustion, and cold state through Starfrost and Survival Mode Improved.
+
+All integrations are optional. If a supported mod is not loaded, `CHIMCustom.dll` silently skips that integration.
 
 ## Flow
 
 1. `CHIMCustom.dll` loads in SKSE.
 2. It reads CHIM server connection settings from `Data/SKSE/Plugins/CHIMCustom.ini`.
 3. It polls the server plugin config endpoint.
-4. If Dirt and Blood is loaded, it checks the player's Dirt and Blood spells.
+4. If a supported mod is loaded, it checks the relevant player spells/globals.
 5. It posts compact visible-state JSON to `ext/CHIM-Custom/api/state.php`.
 6. The HerikaServer plugin stores the state.
-7. `context_pre.php` registers current-character cleanliness into the `character_bottom` prompt injection slot as a focused `<cleaniness>` block.
-8. `globals.php` registers a nearby actor profile enricher so the same state can appear beside equipment/activity details in `<nearby_actors>`.
+7. `context_pre.php` registers current-character cleanliness and survival state into focused prompt blocks.
+8. `globals.php` registers nearby actor profile enrichers so the same state can appear beside equipment/activity details in `<nearby_actors>`.
 
 State is prompt-only by default. It is not written into event history.
 

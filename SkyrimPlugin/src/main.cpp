@@ -29,9 +29,12 @@
 namespace
 {
     constexpr const char* kPluginId = "CHIM-Custom";
-    constexpr const char* kPluginVersion = "0.2.0";
+    constexpr const char* kPluginVersion = "0.3.0";
     constexpr const char* kDirtAndBloodPlugin = "Dirt and Blood - Dynamic Visuals.esp";
     constexpr const char* kSunHelmPlugin = "SunHelmSurvival.esp";
+    constexpr const char* kStarfrostPlugin = "Starfrost.esp";
+    constexpr const char* kSurvivalModePlugin = "ccQDRSSE001-SurvivalMode.esl";
+    constexpr const char* kSurvivalModeImprovedPlugin = "SurvivalModeImproved.esp";
 
     struct ServerSettings
     {
@@ -61,6 +64,18 @@ namespace
         bool coldEnabled{false};
         int hungerLevel{0};
         int thirstLevel{0};
+        int exhaustionLevel{0};
+        int coldLevel{0};
+    };
+
+    struct StarfrostState
+    {
+        bool available{false};
+        bool enabled{false};
+        bool hungerEnabled{false};
+        bool exhaustionEnabled{false};
+        bool coldEnabled{false};
+        int hungerLevel{0};
         int exhaustionLevel{0};
         int coldLevel{0};
     };
@@ -298,6 +313,14 @@ namespace
         return dataHandler->LookupForm<RE::SpellItem>(localFormId, kDirtAndBloodPlugin);
     }
 
+    RE::SpellItem* LookupPluginSpell(RE::TESDataHandler* dataHandler, RE::FormID localFormId, const char* pluginName)
+    {
+        if (!dataHandler || !pluginName) {
+            return nullptr;
+        }
+        return dataHandler->LookupForm<RE::SpellItem>(localFormId, pluginName);
+    }
+
     RE::TESGlobal* LookupGlobal(RE::TESDataHandler* dataHandler, RE::FormID localFormId, const char* pluginName)
     {
         if (!dataHandler || !pluginName) {
@@ -319,6 +342,24 @@ namespace
     bool GlobalEnabled(RE::TESGlobal* global, bool fallback = false)
     {
         return global ? global->value > 0.5f : fallback;
+    }
+
+    int ClampStageLevel(float value)
+    {
+        return std::max(0, std::min(5, static_cast<int>(std::lround(value))));
+    }
+
+    bool ActorHasSpell(RE::Actor* actor, RE::SpellItem* spell)
+    {
+        if (!actor || !spell) {
+            return false;
+        }
+
+        try {
+            return actor->HasSpell(spell);
+        } catch (...) {
+            return false;
+        }
     }
 
     DirtAndBloodState ReadDirtAndBloodState(RE::Actor* actor)
@@ -426,6 +467,53 @@ namespace
         return state;
     }
 
+    StarfrostState ReadStarfrostState(RE::Actor* actor)
+    {
+        StarfrostState state;
+        if (!actor) {
+            return state;
+        }
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            return state;
+        }
+
+        auto* survivalModeEnabled = LookupGlobal(dataHandler, 0x000826, kSurvivalModePlugin);
+        auto* hungerStarted = LookupGlobal(dataHandler, 0x000860, kStarfrostPlugin);
+        auto* exhaustionStage = LookupGlobal(dataHandler, 0x000A1C, kSurvivalModeImprovedPlugin);
+        auto* coldStage = LookupGlobal(dataHandler, 0x000D1E, kSurvivalModeImprovedPlugin);
+        auto* exhaustionEnabled = LookupGlobal(dataHandler, 0x000F29, kSurvivalModeImprovedPlugin);
+        auto* coldEnabled = LookupGlobal(dataHandler, 0x000F28, kSurvivalModeImprovedPlugin);
+
+        auto* hungerSpell1 = LookupPluginSpell(dataHandler, 0x00084E, kStarfrostPlugin);
+        auto* hungerSpell2 = LookupPluginSpell(dataHandler, 0x000856, kStarfrostPlugin);
+        auto* hungerSpell3 = LookupPluginSpell(dataHandler, 0x000857, kStarfrostPlugin);
+
+        state.available = survivalModeEnabled || hungerStarted || exhaustionStage || coldStage || hungerSpell1 || hungerSpell2 || hungerSpell3;
+        if (!state.available) {
+            return state;
+        }
+
+        state.enabled = GlobalEnabled(survivalModeEnabled);
+        state.hungerLevel = 0;
+        if (ActorHasSpell(actor, hungerSpell3)) {
+            state.hungerLevel = 3;
+        } else if (ActorHasSpell(actor, hungerSpell2)) {
+            state.hungerLevel = 2;
+        } else if (ActorHasSpell(actor, hungerSpell1)) {
+            state.hungerLevel = 1;
+        }
+
+        state.hungerEnabled = state.enabled && (GlobalEnabled(hungerStarted) || state.hungerLevel > 0);
+        state.exhaustionEnabled = state.enabled && GlobalEnabled(exhaustionEnabled, true);
+        state.coldEnabled = state.enabled && GlobalEnabled(coldEnabled, true);
+        state.exhaustionLevel = ClampStageLevel(GlobalValue(exhaustionStage));
+        state.coldLevel = ClampStageLevel(GlobalValue(coldStage));
+
+        return state;
+    }
+
     std::string FormIdHex(RE::FormID formId)
     {
         std::ostringstream out;
@@ -502,6 +590,41 @@ namespace
         return body.str();
     }
 
+    std::string BuildStarfrostStatePayload(RE::PlayerCharacter* player, const StarfrostState& state)
+    {
+        std::string playerName = "Player";
+        if (player && player->GetDisplayFullName() && player->GetDisplayFullName()[0]) {
+            playerName = player->GetDisplayFullName();
+        }
+
+        std::ostringstream body;
+        body << "{";
+        body << "\"plugin_id\":\"" << kPluginId << "\",";
+        body << "\"plugin_version\":\"" << kPluginVersion << "\",";
+        body << "\"game_version\":\"skyrim\",";
+        body << "\"states\":[";
+        body << "{";
+        body << "\"integration_id\":\"starfrost_survival\",";
+        body << "\"actor_name\":\"" << JsonEscape(playerName) << "\",";
+        body << "\"actor_type\":\"player\",";
+        body << "\"runtime_formid\":\"" << FormIdHex(player ? player->GetFormID() : 0) << "\",";
+        body << "\"gamets\":0,";
+        body << "\"state\":{";
+        body << "\"source_mod\":\"" << kStarfrostPlugin << "\",";
+        body << "\"enabled\":" << (state.enabled ? "true" : "false") << ",";
+        body << "\"hunger_enabled\":" << (state.hungerEnabled ? "true" : "false") << ",";
+        body << "\"exhaustion_enabled\":" << (state.exhaustionEnabled ? "true" : "false") << ",";
+        body << "\"cold_enabled\":" << (state.coldEnabled ? "true" : "false") << ",";
+        body << "\"hunger_level\":" << state.hungerLevel << ",";
+        body << "\"exhaustion_level\":" << state.exhaustionLevel << ",";
+        body << "\"cold_level\":" << state.coldLevel;
+        body << "}";
+        body << "}";
+        body << "]";
+        body << "}";
+        return body.str();
+    }
+
     std::string BuildHeartbeatPayload()
     {
         std::ostringstream body;
@@ -518,10 +641,13 @@ namespace
     {
         bool dirtAndBloodEnabled = true;
         bool sunHelmEnabled = true;
+        bool starfrostEnabled = true;
         bool loggedDirtAndBloodAvailable = false;
         bool loggedSunHelmAvailable = false;
+        bool loggedStarfrostAvailable = false;
         std::string lastDirtAndBloodHash;
         std::string lastSunHelmHash;
+        std::string lastStarfrostHash;
         auto nextConfigRefresh = std::chrono::steady_clock::now();
         auto nextHeartbeatPost = std::chrono::steady_clock::now();
 
@@ -534,6 +660,7 @@ namespace
                 if (HttpRequest(settings, "GET", settings.configPath, "", &configResponse)) {
                     dirtAndBloodEnabled = ParseIntegrationEnabled(configResponse, "dirt_and_blood");
                     sunHelmEnabled = ParseIntegrationEnabled(configResponse, "sunhelm_survival");
+                    starfrostEnabled = ParseIntegrationEnabled(configResponse, "starfrost_survival");
                 }
                 nextConfigRefresh = now + std::chrono::seconds(60);
             }
@@ -586,6 +713,30 @@ namespace
                     if (hash != lastSunHelmHash) {
                         lastSunHelmHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildSunHelmStatePayload(player, state), nullptr);
+                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                    }
+                }
+            }
+
+            if (player && starfrostEnabled) {
+                StarfrostState state = ReadStarfrostState(player);
+                if (state.available) {
+                    if (!loggedStarfrostAvailable) {
+                        logger::info("[CHIM-Custom] Starfrost Survival detected");
+                        loggedStarfrostAvailable = true;
+                    }
+
+                    std::string hash = std::string(state.enabled ? "1" : "0") + "|" +
+                        (state.hungerEnabled ? "1" : "0") + "|" +
+                        (state.exhaustionEnabled ? "1" : "0") + "|" +
+                        (state.coldEnabled ? "1" : "0") + "|" +
+                        std::to_string(state.hungerLevel) + "|" +
+                        std::to_string(state.exhaustionLevel) + "|" +
+                        std::to_string(state.coldLevel);
+
+                    if (hash != lastStarfrostHash) {
+                        lastStarfrostHash = hash;
+                        HttpRequest(settings, "POST", settings.statePath, BuildStarfrostStatePayload(player, state), nullptr);
                         nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
                     }
                 }
