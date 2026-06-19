@@ -1,0 +1,8 @@
+SkyrimPlugin/build/
+SkyrimPlugin/package/SKSE/Plugins/CHIMCustom.dll
+*.exp
+*.ilk
+*.lib
+*.obj
+*.pdb
+*.user

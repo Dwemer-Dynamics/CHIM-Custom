@@ -1,0 +1,13 @@
+{
+  "registries": [
+    {
+      "kind": "git",
+      "baseline": "fc0de9f522e6696a0904c02ad6cbfd03d6d76d28",
+      "repository": "https://github.com/SkyrimScripting/Packages.git",
+      "packages": [
+        "skyrimscripting-cmake",
+        "skyrimscripting-plugin"
+      ]
+    }
+  ]
+}
