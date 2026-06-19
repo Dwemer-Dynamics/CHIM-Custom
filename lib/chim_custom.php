@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_CUSTOM_VERSION = '0.1.0';
+const CHIM_CUSTOM_VERSION = '0.1.1';
 const CHIM_CUSTOM_DEFAULT_STALE_SECONDS = 180;
 
 function chimCustomDefaultIntegrations(): array
