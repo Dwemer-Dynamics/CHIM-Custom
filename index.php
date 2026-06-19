@@ -18,6 +18,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['integration_id'])) {
     $integrationId = trim((string) $_POST['integration_id']);
     $enabled = isset($_POST['enabled']) && $_POST['enabled'] === '1';
     $promptTemplate = trim((string) ($_POST['prompt_template'] ?? ''));
+    $defaultPromptTemplate = trim(ccIntegrationDefaultPrompt($integrationId));
+    if ($defaultPromptTemplate !== '' && $promptTemplate === $defaultPromptTemplate) {
+        $promptTemplate = '';
+    }
 
     if (chimCustomSetIntegrationSettings($integrationId, $enabled, $promptTemplate)) {
         $message = 'Saved integration settings.';
@@ -136,7 +140,7 @@ function ccIntegrationSampleValues(string $integrationId): array
     ];
 }
 
-function ccIntegrationSampleTemplate(string $integrationId): string
+function ccIntegrationDefaultPrompt(string $integrationId): string
 {
     if ($integrationId === 'bathing_in_skyrim') {
         return '{subject} is {summary}.';
@@ -169,24 +173,14 @@ function ccIntegrationDefaultOutput(string $integrationId): string
 $integrations = chimCustomGetIntegrations();
 $states = chimCustomGetRecentStates(100);
 $heartbeat = chimCustomGetHeartbeat();
-$activeIntegrationCount = 0;
-$customPromptCount = 0;
-foreach ($integrations as $integration) {
-    if (!empty($integration['enabled'])) {
-        $activeIntegrationCount++;
-    }
-    if (trim((string) ($integration['prompt_template'] ?? '')) !== '') {
-        $customPromptCount++;
-    }
-}
 $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
 $sampleValuesByIntegration = [];
-$sampleTemplateByIntegration = [];
+$defaultPromptByIntegration = [];
 $defaultOutputByIntegration = [];
 foreach ($integrations as $integration) {
     $integrationId = (string) ($integration['integration_id'] ?? '');
     $sampleValuesByIntegration[$integrationId] = ccIntegrationSampleValues($integrationId);
-    $sampleTemplateByIntegration[$integrationId] = ccIntegrationSampleTemplate($integrationId);
+    $defaultPromptByIntegration[$integrationId] = ccIntegrationDefaultPrompt($integrationId);
     $defaultOutputByIntegration[$integrationId] = ccIntegrationDefaultOutput($integrationId);
 }
 
@@ -310,30 +304,6 @@ foreach ($integrations as $integration) {
             border-color: rgba(255, 191, 102, 0.5);
             background: rgba(255, 191, 102, 0.08);
             color: var(--cc-warn);
-        }
-
-        .cc-summary {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(150px, 1fr));
-            gap: 12px;
-        }
-
-        .cc-stat {
-            border: 1px solid var(--cc-border);
-            background: var(--cc-panel-soft);
-            border-radius: 8px;
-            padding: 14px;
-        }
-
-        .cc-stat-label {
-            color: var(--cc-muted);
-            font-size: 0.88rem;
-            margin-bottom: 8px;
-        }
-
-        .cc-stat-value {
-            font-size: 1.5rem;
-            color: var(--cc-text);
         }
 
         .cc-manager {
@@ -516,7 +486,6 @@ foreach ($integrations as $integration) {
         }
 
         @media (max-width: 980px) {
-            .cc-summary,
             .cc-manager,
             .cc-form-grid,
             .cc-page-head,
@@ -555,25 +524,6 @@ foreach ($integrations as $integration) {
         <div class="cc-badge accent">Prompt-only state</div>
     </section>
 
-    <section class="cc-summary">
-        <div class="cc-stat">
-            <div class="cc-stat-label">Integrations</div>
-            <div class="cc-stat-value"><?php echo count($integrations); ?></div>
-        </div>
-        <div class="cc-stat">
-            <div class="cc-stat-label">Enabled</div>
-            <div class="cc-stat-value"><?php echo $activeIntegrationCount; ?></div>
-        </div>
-        <div class="cc-stat">
-            <div class="cc-stat-label">Custom Prompts</div>
-            <div class="cc-stat-value"><?php echo $customPromptCount; ?></div>
-        </div>
-        <div class="cc-stat">
-            <div class="cc-stat-label">Recent States</div>
-            <div class="cc-stat-value"><?php echo count($states); ?></div>
-        </div>
-    </section>
-
     <section class="cc-panel">
         <h2>Prompt Manager</h2>
         <div class="cc-manager">
@@ -609,7 +559,9 @@ foreach ($integrations as $integration) {
                     <?php
                     $integrationId = (string) ($integration['integration_id'] ?? '');
                     $isActive = $integrationId === $firstIntegrationId;
-                    $promptTemplate = (string) ($integration['prompt_template'] ?? '');
+                    $savedPromptTemplate = (string) ($integration['prompt_template'] ?? '');
+                    $defaultPromptTemplate = ccIntegrationDefaultPrompt($integrationId);
+                    $promptTemplate = trim($savedPromptTemplate) !== '' ? $savedPromptTemplate : $defaultPromptTemplate;
                     ?>
                     <form method="post" class="cc-editor <?php echo $isActive ? 'active' : ''; ?>" data-editor="<?php echo ccH($integrationId); ?>">
                         <input type="hidden" name="integration_id" value="<?php echo ccH($integrationId); ?>">
@@ -628,19 +580,18 @@ foreach ($integrations as $integration) {
                             <div>
                                 <div class="cc-field-label">
                                     <label for="prompt-template-<?php echo ccH($integrationId); ?>">Prompt Template</label>
-                                    <span class="cc-muted">Saved per integration</span>
+                                    <span class="cc-muted">Default shown when no custom prompt is saved</span>
                                 </div>
                                 <textarea
                                     id="prompt-template-<?php echo ccH($integrationId); ?>"
                                     class="cc-prompt"
                                     name="prompt_template"
-                                    placeholder="<?php echo ccH(ccIntegrationSampleTemplate($integrationId)); ?>"
+                                    placeholder="<?php echo ccH($defaultPromptTemplate); ?>"
                                     data-preview="<?php echo ccH($integrationId); ?>"
                                 ><?php echo ccH($promptTemplate); ?></textarea>
                                 <div class="cc-actions" style="margin-top: 12px;">
                                     <button type="submit" class="btn-base btn-save">Save Changes</button>
-                                    <button type="button" class="btn-base btn-primary" data-reset="<?php echo ccH($integrationId); ?>">Use Default</button>
-                                    <button type="button" class="btn-base" data-sample="<?php echo ccH($integrationId); ?>">Use Sample</button>
+                                    <button type="button" class="btn-base btn-primary" data-reset="<?php echo ccH($integrationId); ?>">Reset to Default</button>
                                 </div>
                             </div>
 
@@ -704,7 +655,7 @@ foreach ($integrations as $integration) {
 <script>
 (function () {
     const samples = <?php echo json_encode($sampleValuesByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
-    const sampleTemplates = <?php echo json_encode($sampleTemplateByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+    const defaultPrompts = <?php echo json_encode($defaultPromptByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
     const defaultOutputs = <?php echo json_encode($defaultOutputByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
 
     function renderTemplate(id, value) {
@@ -785,18 +736,7 @@ foreach ($integrations as $integration) {
             const id = button.getAttribute('data-reset') || '';
             const textarea = findByData('data-preview', id);
             if (textarea) {
-                textarea.value = '';
-                textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        });
-    });
-
-    document.querySelectorAll('[data-sample]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            const id = button.getAttribute('data-sample') || '';
-            const textarea = findByData('data-preview', id);
-            if (textarea) {
-                textarea.value = sampleTemplates[id] || '';
+                textarea.value = defaultPrompts[id] || '';
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
             }
         });

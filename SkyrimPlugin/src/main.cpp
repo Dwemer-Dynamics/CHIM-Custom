@@ -29,7 +29,7 @@
 namespace
 {
     constexpr const char* kPluginId = "CHIM-Custom";
-    constexpr const char* kPluginVersion = "0.4.0";
+    constexpr const char* kPluginVersion = "0.4.1";
     constexpr const char* kDirtAndBloodPlugin = "Dirt and Blood - Dynamic Visuals.esp";
     constexpr const char* kBathingInSkyrimPlugin = "Bathing in Skyrim.esp";
     constexpr const char* kSunHelmPlugin = "SunHelmSurvival.esp";
