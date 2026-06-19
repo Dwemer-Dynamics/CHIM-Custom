@@ -14,18 +14,27 @@ chimCustomRegisterPromptHooks();
 
 $npcName = trim((string) ($GLOBALS['HERIKA_NAME'] ?? ''));
 $playerName = trim((string) ($GLOBALS['PLAYER_NAME'] ?? 'Player'));
-$cleaninessBlock = chimCustomBuildCurrentCharacterCleaninessBlock($npcName, $playerName);
+$blocks = [
+    'chim_custom.cleaniness' => chimCustomBuildCurrentCharacterCleaninessBlock($npcName, $playerName),
+    'chim_custom.survival' => chimCustomBuildCurrentCharacterSurvivalBlock($npcName, $playerName),
+];
 
-if ($cleaninessBlock === '') {
+$blocks = array_filter($blocks, static function ($block) {
+    return trim((string) $block) !== '';
+});
+
+if (function_exists('chimRegisterPromptInjection')) {
+    foreach ($blocks as $id => $block) {
+        chimRegisterPromptInjection('character_bottom', $id, $block, 50);
+    }
     return;
 }
 
-if (function_exists('chimRegisterPromptInjection')) {
-    chimRegisterPromptInjection('character_bottom', 'chim_custom.cleaniness', $cleaninessBlock, 50);
+if (empty($blocks)) {
     return;
 }
 
 if (!isset($GLOBALS['HERIKA_PERS'])) {
     $GLOBALS['HERIKA_PERS'] = '';
 }
-$GLOBALS['HERIKA_PERS'] .= "\n" . $cleaninessBlock;
+$GLOBALS['HERIKA_PERS'] .= "\n" . implode("\n", $blocks);

@@ -36,6 +36,78 @@ function ccIntegrationStatus(array $integration): string
     return !empty($integration['enabled']) ? 'Enabled' : 'Disabled';
 }
 
+function ccIntegrationPromptTokens(string $integrationId): array
+{
+    if ($integrationId === 'sunhelm_survival') {
+        return [
+            '{subject}',
+            '{summary}',
+            '{hunger_level}',
+            '{hunger_description}',
+            '{thirst_level}',
+            '{thirst_description}',
+            '{exhaustion_level}',
+            '{exhaustion_description}',
+            '{cold_level}',
+            '{cold_description}',
+        ];
+    }
+
+    return [
+        '{subject}',
+        '{status}',
+        '{dirt_level}',
+        '{blood_level}',
+        '{dirt_description}',
+        '{blood_description}',
+    ];
+}
+
+function ccIntegrationSampleValues(string $integrationId): array
+{
+    if ($integrationId === 'sunhelm_survival') {
+        return [
+            'subject' => 'Rangroo',
+            'summary' => 'hungry, parched, weary, and cold',
+            'hunger_level' => '3',
+            'hunger_description' => 'hungry',
+            'thirst_level' => '3',
+            'thirst_description' => 'parched',
+            'exhaustion_level' => '4',
+            'exhaustion_description' => 'weary',
+            'cold_level' => '3',
+            'cold_description' => 'cold',
+        ];
+    }
+
+    return [
+        'subject' => 'Rangroo',
+        'status' => 'dirty_bloodied',
+        'dirt_level' => '2',
+        'blood_level' => '1',
+        'dirt_description' => 'dirty',
+        'blood_description' => 'lightly bloodstained',
+    ];
+}
+
+function ccIntegrationSampleTemplate(string $integrationId): string
+{
+    if ($integrationId === 'sunhelm_survival') {
+        return '{subject} is {summary}.';
+    }
+
+    return '{subject} is {dirt_description} and {blood_description}.';
+}
+
+function ccIntegrationDefaultOutput(string $integrationId): string
+{
+    if ($integrationId === 'sunhelm_survival') {
+        return 'Rangroo is hungry, parched, weary, and cold.';
+    }
+
+    return 'Rangroo is dirty and lightly bloodstained.';
+}
+
 $integrations = chimCustomGetIntegrations();
 $states = chimCustomGetRecentStates(100);
 $heartbeat = chimCustomGetHeartbeat();
@@ -50,6 +122,15 @@ foreach ($integrations as $integration) {
     }
 }
 $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
+$sampleValuesByIntegration = [];
+$sampleTemplateByIntegration = [];
+$defaultOutputByIntegration = [];
+foreach ($integrations as $integration) {
+    $integrationId = (string) ($integration['integration_id'] ?? '');
+    $sampleValuesByIntegration[$integrationId] = ccIntegrationSampleValues($integrationId);
+    $sampleTemplateByIntegration[$integrationId] = ccIntegrationSampleTemplate($integrationId);
+    $defaultOutputByIntegration[$integrationId] = ccIntegrationDefaultOutput($integrationId);
+}
 
 ?>
 <!doctype html>
@@ -495,7 +576,7 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
                                     id="prompt-template-<?php echo ccH($integrationId); ?>"
                                     class="cc-prompt"
                                     name="prompt_template"
-                                    placeholder="{subject} is {dirt_description} and {blood_description}."
+                                    placeholder="<?php echo ccH(ccIntegrationSampleTemplate($integrationId)); ?>"
                                     data-preview="<?php echo ccH($integrationId); ?>"
                                 ><?php echo ccH($promptTemplate); ?></textarea>
                                 <div class="cc-actions" style="margin-top: 12px;">
@@ -509,7 +590,7 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
                                 <div class="cc-side-box">
                                     <h4>Variables</h4>
                                     <div class="cc-variable-row">
-                                        <?php foreach (['{subject}', '{status}', '{dirt_level}', '{blood_level}', '{dirt_description}', '{blood_description}'] as $token): ?>
+                                        <?php foreach (ccIntegrationPromptTokens($integrationId) as $token): ?>
                                             <button type="button" class="cc-token" data-insert="<?php echo ccH($token); ?>" data-for="<?php echo ccH($integrationId); ?>"><?php echo ccH($token); ?></button>
                                         <?php endforeach; ?>
                                     </div>
@@ -517,7 +598,7 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
 
                                 <div class="cc-side-box">
                                     <h4>Default Output</h4>
-                                    <div class="cc-default-line">Rangroo is dirty and lightly bloodstained.</div>
+                                    <div class="cc-default-line"><?php echo ccH(ccIntegrationDefaultOutput($integrationId)); ?></div>
                                 </div>
 
                                 <div class="cc-side-box">
@@ -564,23 +645,17 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
 
 <script>
 (function () {
-    const sample = {
-        subject: 'Rangroo',
-        status: 'dirty_bloodied',
-        dirt_level: '2',
-        blood_level: '1',
-        dirt_description: 'dirty',
-        blood_description: 'lightly bloodstained'
-    };
-    const sampleTemplate = '{subject} is {dirt_description} and {blood_description}.';
-    const defaultPreview = 'Rangroo is dirty and lightly bloodstained.';
+    const samples = <?php echo json_encode($sampleValuesByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+    const sampleTemplates = <?php echo json_encode($sampleTemplateByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+    const defaultOutputs = <?php echo json_encode($defaultOutputByIntegration, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
 
-    function renderTemplate(value) {
+    function renderTemplate(id, value) {
         const template = (value || '').trim();
         if (template === '') {
-            return defaultPreview;
+            return defaultOutputs[id] || '';
         }
-        return template.replace(/\{subject\}|\{status\}|\{dirt_level\}|\{blood_level\}|\{dirt_description\}|\{blood_description\}/g, function (token) {
+        const sample = samples[id] || {};
+        return template.replace(/\{[a-zA-Z0-9_]+\}/g, function (token) {
             const key = token.slice(1, -1);
             return Object.prototype.hasOwnProperty.call(sample, key) ? sample[key] : token;
         });
@@ -598,7 +673,7 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
         if (!textarea || !output) {
             return;
         }
-        output.textContent = renderTemplate(textarea.value);
+        output.textContent = renderTemplate(id, textarea.value);
     }
 
     function activateEditor(id) {
@@ -663,7 +738,7 @@ $firstIntegrationId = (string) ($integrations[0]['integration_id'] ?? '');
             const id = button.getAttribute('data-sample') || '';
             const textarea = findByData('data-preview', id);
             if (textarea) {
-                textarea.value = sampleTemplate;
+                textarea.value = sampleTemplates[id] || '';
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
             }
         });

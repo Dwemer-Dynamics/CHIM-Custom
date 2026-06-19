@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_CUSTOM_VERSION = '0.1.1';
+const CHIM_CUSTOM_VERSION = '0.2.0';
 const CHIM_CUSTOM_DEFAULT_STALE_SECONDS = 180;
 
 function chimCustomDefaultIntegrations(): array
@@ -20,6 +20,30 @@ function chimCustomDefaultIntegrations(): array
                     'blood' => ['00000809', '0000080A', '0000080B', '00000839'],
                     'clean' => '0000080C',
                     'washing' => '0000081C',
+                ],
+            ],
+        ],
+        'sunhelm_survival' => [
+            'integration_id' => 'sunhelm_survival',
+            'display_name' => 'SunHelm Survival',
+            'description' => 'Adds player hunger, thirst, exhaustion, and cold state from SunHelm Survival to CHIM prompts when the mod is installed.',
+            'enabled' => true,
+            'prompt_template' => '',
+            'native_config' => [
+                'required_plugins' => ['SunHelmSurvival.esp'],
+                'poll_seconds' => 8,
+                'forms' => [
+                    'survival_toggle' => '00A9AD94',
+                    'hunger_level' => '0000EAAE',
+                    'thirst_level' => '0005C472',
+                    'exhaustion_level' => '00021E3F',
+                    'cold_level' => '006A13C5',
+                    'hunger_disabled' => '00752707',
+                    'thirst_disabled' => '00752708',
+                    'exhaustion_disabled' => '00752709',
+                    'cold_disabled' => '0075270A',
+                    'cold_active' => '0079441D',
+                    'cold_force_disabled' => '0083132C',
                 ],
             ],
         ],
@@ -197,6 +221,33 @@ function chimCustomSanitizeDirtAndBloodState(array $state): array
     ];
 }
 
+function chimCustomClampNeedLevel($value): int
+{
+    return max(0, min(5, intval(round(floatval($value)))));
+}
+
+function chimCustomSanitizeSunHelmState(array $state): array
+{
+    $enabled = !empty($state['enabled']);
+    $hungerEnabled = $enabled && !empty($state['hunger_enabled']);
+    $thirstEnabled = $enabled && !empty($state['thirst_enabled']);
+    $exhaustionEnabled = $enabled && !empty($state['exhaustion_enabled']);
+    $coldEnabled = $enabled && !empty($state['cold_enabled']);
+
+    return [
+        'enabled' => $enabled,
+        'hunger_enabled' => $hungerEnabled,
+        'thirst_enabled' => $thirstEnabled,
+        'exhaustion_enabled' => $exhaustionEnabled,
+        'cold_enabled' => $coldEnabled,
+        'hunger_level' => chimCustomClampNeedLevel($state['hunger_level'] ?? 0),
+        'thirst_level' => chimCustomClampNeedLevel($state['thirst_level'] ?? 0),
+        'exhaustion_level' => chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0),
+        'cold_level' => chimCustomClampNeedLevel($state['cold_level'] ?? 0),
+        'source_mod' => trim((string) ($state['source_mod'] ?? 'SunHelmSurvival.esp')),
+    ];
+}
+
 function chimCustomUpsertActorState(array $payload): bool
 {
     global $db;
@@ -219,6 +270,8 @@ function chimCustomUpsertActorState(array $payload): bool
     $state = is_array($payload['state'] ?? null) ? $payload['state'] : [];
     if ($integrationId === 'dirt_and_blood') {
         $state = chimCustomSanitizeDirtAndBloodState($state);
+    } elseif ($integrationId === 'sunhelm_survival') {
+        $state = chimCustomSanitizeSunHelmState($state);
     }
 
     $actorKey = chimCustomActorKey($actorType, $actorName, (string) ($payload['runtime_formid'] ?? ''));
@@ -434,6 +487,98 @@ function chimCustomRenderDirtAndBloodState(array $state, string $subject, string
     ]);
 }
 
+function chimCustomSunHelmLevelText(string $need, int $level): string
+{
+    $labels = [
+        'hunger' => [
+            0 => 'well fed',
+            1 => 'satisfied',
+            2 => 'peckish',
+            3 => 'hungry',
+            4 => 'ravenous',
+            5 => 'starving',
+        ],
+        'thirst' => [
+            0 => 'quenched',
+            1 => 'sated',
+            2 => 'thirsty',
+            3 => 'parched',
+            4 => 'dehydrated',
+            5 => 'severely dehydrated',
+        ],
+        'exhaustion' => [
+            0 => 'well rested',
+            1 => 'rested',
+            2 => 'slightly tired',
+            3 => 'tired',
+            4 => 'weary',
+            5 => 'exhausted',
+        ],
+        'cold' => [
+            0 => 'warm',
+            1 => 'comfortable',
+            2 => 'chilly',
+            3 => 'cold',
+            4 => 'freezing',
+            5 => 'frigid',
+        ],
+    ];
+
+    return $labels[$need][$level] ?? '';
+}
+
+function chimCustomDescribeSunHelmState(array $state): string
+{
+    if (empty($state['enabled'])) {
+        return '';
+    }
+
+    $parts = [];
+    foreach (['hunger', 'thirst', 'exhaustion', 'cold'] as $need) {
+        if (empty($state[$need . '_enabled'])) {
+            continue;
+        }
+        $level = chimCustomClampNeedLevel($state[$need . '_level'] ?? 0);
+        if ($level < 2) {
+            continue;
+        }
+        $label = chimCustomSunHelmLevelText($need, $level);
+        if ($label !== '') {
+            $parts[] = $label;
+        }
+    }
+
+    return implode(', ', $parts);
+}
+
+function chimCustomRenderSunHelmState(array $state, string $subject, string $template = ''): string
+{
+    $subject = trim($subject) !== '' ? trim($subject) : 'They';
+    $summary = chimCustomDescribeSunHelmState($state);
+    if ($summary === '') {
+        return '';
+    }
+
+    $default = "{$subject} " . chimCustomSubjectBeVerb($subject) . " {$summary}.";
+    $template = trim($template);
+    if ($template === '') {
+        return $default;
+    }
+
+    return strtr($template, [
+        '{subject}' => $subject,
+        '{summary}' => $summary,
+        '{hunger_level}' => (string) chimCustomClampNeedLevel($state['hunger_level'] ?? 0),
+        '{hunger_description}' => chimCustomSunHelmLevelText('hunger', chimCustomClampNeedLevel($state['hunger_level'] ?? 0)),
+        '{thirst_level}' => (string) chimCustomClampNeedLevel($state['thirst_level'] ?? 0),
+        '{thirst_description}' => chimCustomSunHelmLevelText('thirst', chimCustomClampNeedLevel($state['thirst_level'] ?? 0)),
+        '{exhaustion_level}' => (string) chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0),
+        '{exhaustion_description}' => chimCustomSunHelmLevelText('exhaustion', chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0)),
+        '{cold_level}' => (string) chimCustomClampNeedLevel($state['cold_level'] ?? 0),
+        '{cold_description}' => chimCustomSunHelmLevelText('cold', chimCustomClampNeedLevel($state['cold_level'] ?? 0)),
+    ]);
+}
+
 function chimCustomFindFreshActorState(string $actorName, string $actorType = '', string $integrationId = 'dirt_and_blood'): ?array
 {
     static $recentRows = null;
@@ -511,6 +656,27 @@ function chimCustomBuildCurrentCharacterCleaninessBlock(string $npcName, string 
     return "<cleaniness>\n{$line}\n</cleaniness>";
 }
 
+function chimCustomBuildCurrentCharacterSurvivalBlock(string $npcName, string $playerName): string
+{
+    $npcName = trim($npcName);
+    if ($npcName === '' || strcasecmp($npcName, $playerName) !== 0) {
+        return '';
+    }
+
+    $row = chimCustomFindFreshActorState($playerName, 'player', 'sunhelm_survival');
+    if (!$row) {
+        return '';
+    }
+
+    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
+    $line = chimCustomRenderSunHelmState($state, 'You', (string) (($row['integration']['prompt_template'] ?? '') ?: ''));
+    if ($line === '') {
+        return '';
+    }
+
+    return "<survival>\n{$line}\n</survival>";
+}
+
 function chimCustomActorProfileCleaniness(string $actorName, string $actorType, array $context = []): string
 {
     $row = chimCustomFindFreshActorState($actorName, $actorType);
@@ -527,10 +693,27 @@ function chimCustomActorProfileCleaniness(string $actorName, string $actorType, 
     return 'Cleaniness: ' . $description;
 }
 
+function chimCustomActorProfileSurvival(string $actorName, string $actorType, array $context = []): string
+{
+    $row = chimCustomFindFreshActorState($actorName, $actorType, 'sunhelm_survival');
+    if (!$row) {
+        return '';
+    }
+
+    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
+    $description = chimCustomDescribeSunHelmState($state);
+    if ($description === '') {
+        return '';
+    }
+
+    return 'Survival: ' . $description;
+}
+
 function chimCustomRegisterPromptHooks(): void
 {
     if (function_exists('chimRegisterActorProfileEnricher')) {
         chimRegisterActorProfileEnricher('chim_custom.cleaniness', 'chimCustomActorProfileCleaniness', 50);
+        chimRegisterActorProfileEnricher('chim_custom.survival', 'chimCustomActorProfileSurvival', 55);
         return;
     }
 
@@ -538,11 +721,21 @@ function chimCustomRegisterPromptHooks(): void
         $GLOBALS['PROMPT_ACTOR_PROFILE_ENRICHERS'] = [];
     }
 
+    $hasCleaniness = false;
+    $hasSurvival = false;
     foreach ($GLOBALS['PROMPT_ACTOR_PROFILE_ENRICHERS'] as $enricher) {
         if ($enricher === 'chimCustomActorProfileCleaniness') {
-            return;
+            $hasCleaniness = true;
+        }
+        if ($enricher === 'chimCustomActorProfileSurvival') {
+            $hasSurvival = true;
         }
     }
 
-    $GLOBALS['PROMPT_ACTOR_PROFILE_ENRICHERS'][] = 'chimCustomActorProfileCleaniness';
+    if (!$hasCleaniness) {
+        $GLOBALS['PROMPT_ACTOR_PROFILE_ENRICHERS'][] = 'chimCustomActorProfileCleaniness';
+    }
+    if (!$hasSurvival) {
+        $GLOBALS['PROMPT_ACTOR_PROFILE_ENRICHERS'][] = 'chimCustomActorProfileSurvival';
+    }
 }

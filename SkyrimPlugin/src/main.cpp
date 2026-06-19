@@ -2,10 +2,12 @@
 
 #include <RE/Skyrim.h>
 #include <RE/T/TESDataHandler.h>
+#include <RE/T/TESGlobal.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
@@ -27,8 +29,9 @@
 namespace
 {
     constexpr const char* kPluginId = "CHIM-Custom";
-    constexpr const char* kPluginVersion = "0.1.0";
+    constexpr const char* kPluginVersion = "0.2.0";
     constexpr const char* kDirtAndBloodPlugin = "Dirt and Blood - Dynamic Visuals.esp";
+    constexpr const char* kSunHelmPlugin = "SunHelmSurvival.esp";
 
     struct ServerSettings
     {
@@ -46,6 +49,20 @@ namespace
         int bloodLevel{0};
         bool isClean{false};
         bool isWashing{false};
+    };
+
+    struct SunHelmState
+    {
+        bool available{false};
+        bool enabled{false};
+        bool hungerEnabled{false};
+        bool thirstEnabled{false};
+        bool exhaustionEnabled{false};
+        bool coldEnabled{false};
+        int hungerLevel{0};
+        int thirstLevel{0};
+        int exhaustionLevel{0};
+        int coldLevel{0};
     };
 
     std::atomic_bool g_monitorRunning{false};
@@ -253,9 +270,9 @@ namespace
         return ok;
     }
 
-    bool ParseDirtAndBloodEnabled(const std::string& configResponse)
+    bool ParseIntegrationEnabled(const std::string& configResponse, const std::string& integrationId)
     {
-        auto idPos = configResponse.find("\"integration_id\":\"dirt_and_blood\"");
+        auto idPos = configResponse.find("\"integration_id\":\"" + integrationId + "\"");
         if (idPos == std::string::npos) {
             return true;
         }
@@ -279,6 +296,29 @@ namespace
             return nullptr;
         }
         return dataHandler->LookupForm<RE::SpellItem>(localFormId, kDirtAndBloodPlugin);
+    }
+
+    RE::TESGlobal* LookupGlobal(RE::TESDataHandler* dataHandler, RE::FormID localFormId, const char* pluginName)
+    {
+        if (!dataHandler || !pluginName) {
+            return nullptr;
+        }
+        return dataHandler->LookupForm<RE::TESGlobal>(localFormId, pluginName);
+    }
+
+    int ClampNeedLevel(float value)
+    {
+        return std::max(0, std::min(5, static_cast<int>(std::lround(value))));
+    }
+
+    float GlobalValue(RE::TESGlobal* global, float fallback = 0.0f)
+    {
+        return global ? global->value : fallback;
+    }
+
+    bool GlobalEnabled(RE::TESGlobal* global, bool fallback = false)
+    {
+        return global ? global->value > 0.5f : fallback;
     }
 
     DirtAndBloodState ReadDirtAndBloodState(RE::Actor* actor)
@@ -347,6 +387,45 @@ namespace
         return state;
     }
 
+    SunHelmState ReadSunHelmState()
+    {
+        SunHelmState state;
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            return state;
+        }
+
+        auto* survivalToggle = LookupGlobal(dataHandler, 0x00A9AD94, kSunHelmPlugin);
+        auto* hungerLevel = LookupGlobal(dataHandler, 0x0000EAAE, kSunHelmPlugin);
+        auto* thirstLevel = LookupGlobal(dataHandler, 0x0005C472, kSunHelmPlugin);
+        auto* exhaustionLevel = LookupGlobal(dataHandler, 0x00021E3F, kSunHelmPlugin);
+        auto* coldLevel = LookupGlobal(dataHandler, 0x006A13C5, kSunHelmPlugin);
+        auto* hungerDisabled = LookupGlobal(dataHandler, 0x00752707, kSunHelmPlugin);
+        auto* thirstDisabled = LookupGlobal(dataHandler, 0x00752708, kSunHelmPlugin);
+        auto* exhaustionDisabled = LookupGlobal(dataHandler, 0x00752709, kSunHelmPlugin);
+        auto* coldDisabled = LookupGlobal(dataHandler, 0x0075270A, kSunHelmPlugin);
+        auto* coldActive = LookupGlobal(dataHandler, 0x0079441D, kSunHelmPlugin);
+        auto* coldForceDisabled = LookupGlobal(dataHandler, 0x0083132C, kSunHelmPlugin);
+
+        state.available = survivalToggle || hungerLevel || thirstLevel || exhaustionLevel || coldLevel;
+        if (!state.available) {
+            return state;
+        }
+
+        state.enabled = GlobalEnabled(survivalToggle, true);
+        state.hungerEnabled = state.enabled && !GlobalEnabled(hungerDisabled);
+        state.thirstEnabled = state.enabled && !GlobalEnabled(thirstDisabled);
+        state.exhaustionEnabled = state.enabled && !GlobalEnabled(exhaustionDisabled);
+        state.coldEnabled = state.enabled && GlobalEnabled(coldActive, true) && !GlobalEnabled(coldDisabled) && !GlobalEnabled(coldForceDisabled);
+        state.hungerLevel = ClampNeedLevel(GlobalValue(hungerLevel));
+        state.thirstLevel = ClampNeedLevel(GlobalValue(thirstLevel));
+        state.exhaustionLevel = ClampNeedLevel(GlobalValue(exhaustionLevel));
+        state.coldLevel = ClampNeedLevel(GlobalValue(coldLevel));
+
+        return state;
+    }
+
     std::string FormIdHex(RE::FormID formId)
     {
         std::ostringstream out;
@@ -386,6 +465,43 @@ namespace
         return body.str();
     }
 
+    std::string BuildSunHelmStatePayload(RE::PlayerCharacter* player, const SunHelmState& state)
+    {
+        std::string playerName = "Player";
+        if (player && player->GetDisplayFullName() && player->GetDisplayFullName()[0]) {
+            playerName = player->GetDisplayFullName();
+        }
+
+        std::ostringstream body;
+        body << "{";
+        body << "\"plugin_id\":\"" << kPluginId << "\",";
+        body << "\"plugin_version\":\"" << kPluginVersion << "\",";
+        body << "\"game_version\":\"skyrim\",";
+        body << "\"states\":[";
+        body << "{";
+        body << "\"integration_id\":\"sunhelm_survival\",";
+        body << "\"actor_name\":\"" << JsonEscape(playerName) << "\",";
+        body << "\"actor_type\":\"player\",";
+        body << "\"runtime_formid\":\"" << FormIdHex(player ? player->GetFormID() : 0) << "\",";
+        body << "\"gamets\":0,";
+        body << "\"state\":{";
+        body << "\"source_mod\":\"" << kSunHelmPlugin << "\",";
+        body << "\"enabled\":" << (state.enabled ? "true" : "false") << ",";
+        body << "\"hunger_enabled\":" << (state.hungerEnabled ? "true" : "false") << ",";
+        body << "\"thirst_enabled\":" << (state.thirstEnabled ? "true" : "false") << ",";
+        body << "\"exhaustion_enabled\":" << (state.exhaustionEnabled ? "true" : "false") << ",";
+        body << "\"cold_enabled\":" << (state.coldEnabled ? "true" : "false") << ",";
+        body << "\"hunger_level\":" << state.hungerLevel << ",";
+        body << "\"thirst_level\":" << state.thirstLevel << ",";
+        body << "\"exhaustion_level\":" << state.exhaustionLevel << ",";
+        body << "\"cold_level\":" << state.coldLevel;
+        body << "}";
+        body << "}";
+        body << "]";
+        body << "}";
+        return body.str();
+    }
+
     std::string BuildHeartbeatPayload()
     {
         std::ostringstream body;
@@ -401,8 +517,11 @@ namespace
     void MonitorLoop()
     {
         bool dirtAndBloodEnabled = true;
-        bool loggedAvailable = false;
-        std::string lastHash;
+        bool sunHelmEnabled = true;
+        bool loggedDirtAndBloodAvailable = false;
+        bool loggedSunHelmAvailable = false;
+        std::string lastDirtAndBloodHash;
+        std::string lastSunHelmHash;
         auto nextConfigRefresh = std::chrono::steady_clock::now();
         auto nextHeartbeatPost = std::chrono::steady_clock::now();
 
@@ -413,7 +532,8 @@ namespace
             if (now >= nextConfigRefresh) {
                 std::string configResponse;
                 if (HttpRequest(settings, "GET", settings.configPath, "", &configResponse)) {
-                    dirtAndBloodEnabled = ParseDirtAndBloodEnabled(configResponse);
+                    dirtAndBloodEnabled = ParseIntegrationEnabled(configResponse, "dirt_and_blood");
+                    sunHelmEnabled = ParseIntegrationEnabled(configResponse, "sunhelm_survival");
                 }
                 nextConfigRefresh = now + std::chrono::seconds(60);
             }
@@ -427,9 +547,9 @@ namespace
             if (player && dirtAndBloodEnabled) {
                 DirtAndBloodState state = ReadDirtAndBloodState(player);
                 if (state.available) {
-                    if (!loggedAvailable) {
+                    if (!loggedDirtAndBloodAvailable) {
                         logger::info("[CHIM-Custom] Dirt and Blood detected");
-                        loggedAvailable = true;
+                        loggedDirtAndBloodAvailable = true;
                     }
 
                     std::string hash = std::to_string(state.dirtLevel) + "|" +
@@ -437,9 +557,35 @@ namespace
                         (state.isClean ? "1" : "0") + "|" +
                         (state.isWashing ? "1" : "0");
 
-                    if (hash != lastHash) {
-                        lastHash = hash;
+                    if (hash != lastDirtAndBloodHash) {
+                        lastDirtAndBloodHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildStatePayload(player, state), nullptr);
+                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                    }
+                }
+            }
+
+            if (player && sunHelmEnabled) {
+                SunHelmState state = ReadSunHelmState();
+                if (state.available) {
+                    if (!loggedSunHelmAvailable) {
+                        logger::info("[CHIM-Custom] SunHelm Survival detected");
+                        loggedSunHelmAvailable = true;
+                    }
+
+                    std::string hash = std::string(state.enabled ? "1" : "0") + "|" +
+                        (state.hungerEnabled ? "1" : "0") + "|" +
+                        (state.thirstEnabled ? "1" : "0") + "|" +
+                        (state.exhaustionEnabled ? "1" : "0") + "|" +
+                        (state.coldEnabled ? "1" : "0") + "|" +
+                        std::to_string(state.hungerLevel) + "|" +
+                        std::to_string(state.thirstLevel) + "|" +
+                        std::to_string(state.exhaustionLevel) + "|" +
+                        std::to_string(state.coldLevel);
+
+                    if (hash != lastSunHelmHash) {
+                        lastSunHelmHash = hash;
+                        HttpRequest(settings, "POST", settings.statePath, BuildSunHelmStatePayload(player, state), nullptr);
                         nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
                     }
                 }
