@@ -38,6 +38,21 @@ function ccIntegrationStatus(array $integration): string
 
 function ccIntegrationPromptTokens(string $integrationId): array
 {
+    if ($integrationId === 'bathing_in_skyrim') {
+        return [
+            '{subject}',
+            '{status}',
+            '{summary}',
+            '{dirtiness_tier}',
+            '{tier}',
+            '{dirtiness_description}',
+            '{is_dirty}',
+            '{is_very_dirty}',
+            '{is_bathing}',
+            '{is_soapy}',
+        ];
+    }
+
     if ($integrationId === 'sunhelm_survival' || $integrationId === 'starfrost_survival') {
         $tokens = [
             '{subject}',
@@ -68,6 +83,21 @@ function ccIntegrationPromptTokens(string $integrationId): array
 
 function ccIntegrationSampleValues(string $integrationId): array
 {
+    if ($integrationId === 'bathing_in_skyrim') {
+        return [
+            'subject' => 'Rangroo',
+            'status' => 'quite_dirty',
+            'summary' => 'quite dirty',
+            'dirtiness_tier' => '3',
+            'tier' => '3',
+            'dirtiness_description' => 'quite dirty',
+            'is_dirty' => 'true',
+            'is_very_dirty' => 'true',
+            'is_bathing' => 'false',
+            'is_soapy' => 'false',
+        ];
+    }
+
     if ($integrationId === 'starfrost_survival') {
         return [
             'subject' => 'Rangroo',
@@ -108,6 +138,10 @@ function ccIntegrationSampleValues(string $integrationId): array
 
 function ccIntegrationSampleTemplate(string $integrationId): string
 {
+    if ($integrationId === 'bathing_in_skyrim') {
+        return '{subject} is {summary}.';
+    }
+
     if ($integrationId === 'sunhelm_survival' || $integrationId === 'starfrost_survival') {
         return '{subject} is {summary}.';
     }
@@ -117,6 +151,10 @@ function ccIntegrationSampleTemplate(string $integrationId): string
 
 function ccIntegrationDefaultOutput(string $integrationId): string
 {
+    if ($integrationId === 'bathing_in_skyrim') {
+        return 'Rangroo is quite dirty.';
+    }
+
     if ($integrationId === 'starfrost_survival') {
         return 'Rangroo is hungry, very tired, and very cold.';
     }

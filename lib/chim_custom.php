@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_CUSTOM_VERSION = '0.3.0';
+const CHIM_CUSTOM_VERSION = '0.4.0';
 const CHIM_CUSTOM_DEFAULT_STALE_SECONDS = 180;
 
 function chimCustomDefaultIntegrations(): array
@@ -20,6 +20,28 @@ function chimCustomDefaultIntegrations(): array
                     'blood' => ['00000809', '0000080A', '0000080B', '00000839'],
                     'clean' => '0000080C',
                     'washing' => '0000081C',
+                ],
+            ],
+        ],
+        'bathing_in_skyrim' => [
+            'integration_id' => 'bathing_in_skyrim',
+            'display_name' => 'Bathing in Skyrim - Renewed',
+            'description' => 'Adds player dirtiness, bathing, and soapy state from Bathing in Skyrim - Renewed to CHIM prompts when the mod is installed.',
+            'enabled' => true,
+            'prompt_template' => '',
+            'native_config' => [
+                'required_plugins' => ['Bathing in Skyrim.esp'],
+                'poll_seconds' => 8,
+                'forms' => [
+                    'enabled' => '00000C',
+                    'tier_clean' => '000043',
+                    'tier_not_dirty' => '000044',
+                    'tier_slightly_dirty' => '000045',
+                    'tier_quite_dirty' => '000046',
+                    'tier_filthy' => '00006D',
+                    'bathing' => '00003D',
+                    'soapy' => '000039',
+                    'soapy_animated' => '00003B',
                 ],
             ],
         ],
@@ -248,6 +270,50 @@ function chimCustomClampNeedLevel($value): int
     return max(0, min(5, intval(round(floatval($value)))));
 }
 
+function chimCustomClampBathingTier($value): int
+{
+    return max(0, min(4, intval(round(floatval($value)))));
+}
+
+function chimCustomSanitizeBathingInSkyrimState(array $state): array
+{
+    $enabled = !empty($state['enabled']);
+    $tier = chimCustomClampBathingTier($state['dirtiness_tier'] ?? 0);
+    $isBathing = !empty($state['is_bathing']);
+    $isSoapy = !empty($state['is_soapy']);
+
+    $status = 'clean';
+    if (!$enabled) {
+        $status = 'disabled';
+    } elseif ($isBathing && $isSoapy) {
+        $status = 'soapy_bathing';
+    } elseif ($isBathing) {
+        $status = 'bathing';
+    } elseif ($isSoapy) {
+        $status = 'soapy';
+    } elseif ($tier >= 4) {
+        $status = 'filthy';
+    } elseif ($tier === 3) {
+        $status = 'quite_dirty';
+    } elseif ($tier === 2) {
+        $status = 'slightly_dirty';
+    } elseif ($tier === 1) {
+        $status = 'not_dirty';
+    }
+
+    return [
+        'enabled' => $enabled,
+        'status' => $status,
+        'dirtiness_tier' => $tier,
+        'dirtiness_description' => chimCustomBathingInSkyrimTierText($tier),
+        'is_dirty' => $tier >= 2,
+        'is_very_dirty' => $tier >= 3,
+        'is_bathing' => $isBathing,
+        'is_soapy' => $isSoapy,
+        'source_mod' => trim((string) ($state['source_mod'] ?? 'Bathing in Skyrim.esp')),
+    ];
+}
+
 function chimCustomSanitizeSunHelmState(array $state): array
 {
     $enabled = !empty($state['enabled']);
@@ -311,6 +377,8 @@ function chimCustomUpsertActorState(array $payload): bool
     $state = is_array($payload['state'] ?? null) ? $payload['state'] : [];
     if ($integrationId === 'dirt_and_blood') {
         $state = chimCustomSanitizeDirtAndBloodState($state);
+    } elseif ($integrationId === 'bathing_in_skyrim') {
+        $state = chimCustomSanitizeBathingInSkyrimState($state);
     } elseif ($integrationId === 'sunhelm_survival') {
         $state = chimCustomSanitizeSunHelmState($state);
     } elseif ($integrationId === 'starfrost_survival') {
@@ -530,6 +598,76 @@ function chimCustomRenderDirtAndBloodState(array $state, string $subject, string
     ]);
 }
 
+function chimCustomBathingInSkyrimTierText(int $tier): string
+{
+    return [
+        0 => 'clean',
+        1 => 'not dirty',
+        2 => 'slightly dirty',
+        3 => 'quite dirty',
+        4 => 'filthy',
+    ][$tier] ?? '';
+}
+
+function chimCustomDescribeBathingInSkyrimState(array $state): string
+{
+    if (empty($state['enabled'])) {
+        return '';
+    }
+
+    $tier = chimCustomClampBathingTier($state['dirtiness_tier'] ?? 0);
+    $tierDescription = chimCustomBathingInSkyrimTierText($tier);
+    $isBathing = !empty($state['is_bathing']);
+    $isSoapy = !empty($state['is_soapy']);
+
+    if ($isBathing && $isSoapy) {
+        return 'soapy and washing up';
+    }
+    if ($isBathing) {
+        return 'washing up';
+    }
+    if ($isSoapy && $tier >= 2 && $tierDescription !== '') {
+        return 'soapy and ' . $tierDescription;
+    }
+    if ($isSoapy) {
+        return 'soapy';
+    }
+    if ($tier >= 2) {
+        return $tierDescription;
+    }
+
+    return '';
+}
+
+function chimCustomRenderBathingInSkyrimState(array $state, string $subject, string $template = ''): string
+{
+    $subject = trim($subject) !== '' ? trim($subject) : 'They';
+    $description = chimCustomDescribeBathingInSkyrimState($state);
+    if ($description === '') {
+        return '';
+    }
+
+    $default = "{$subject} " . chimCustomSubjectBeVerb($subject) . " {$description}.";
+    $template = trim($template);
+    if ($template === '') {
+        return $default;
+    }
+
+    $tier = chimCustomClampBathingTier($state['dirtiness_tier'] ?? 0);
+    return strtr($template, [
+        '{subject}' => $subject,
+        '{status}' => (string) ($state['status'] ?? ''),
+        '{summary}' => $description,
+        '{dirtiness_tier}' => (string) $tier,
+        '{tier}' => (string) $tier,
+        '{dirtiness_description}' => chimCustomBathingInSkyrimTierText($tier),
+        '{is_dirty}' => !empty($state['is_dirty']) ? 'true' : 'false',
+        '{is_very_dirty}' => !empty($state['is_very_dirty']) ? 'true' : 'false',
+        '{is_bathing}' => !empty($state['is_bathing']) ? 'true' : 'false',
+        '{is_soapy}' => !empty($state['is_soapy']) ? 'true' : 'false',
+    ]);
+}
+
 function chimCustomSunHelmLevelText(string $need, int $level): string
 {
     $labels = [
@@ -699,6 +837,43 @@ function chimCustomRenderStarfrostState(array $state, string $subject, string $t
     ]);
 }
 
+function chimCustomFindFreshCleaninessStates(string $actorName, string $actorType = ''): array
+{
+    $rows = [];
+    foreach (['dirt_and_blood', 'bathing_in_skyrim'] as $integrationId) {
+        $row = chimCustomFindFreshActorState($actorName, $actorType, $integrationId);
+        if ($row) {
+            $rows[] = $row;
+        }
+    }
+    return $rows;
+}
+
+function chimCustomDescribeCleaninessRow(array $row): string
+{
+    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
+    $integrationId = (string) ($row['integration_id'] ?? '');
+
+    if ($integrationId === 'bathing_in_skyrim') {
+        return chimCustomDescribeBathingInSkyrimState($state);
+    }
+
+    return chimCustomDescribeDirtAndBloodState($state);
+}
+
+function chimCustomRenderCleaninessRow(array $row, string $subject): string
+{
+    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
+    $template = (string) (($row['integration']['prompt_template'] ?? '') ?: '');
+    $integrationId = (string) ($row['integration_id'] ?? '');
+
+    if ($integrationId === 'bathing_in_skyrim') {
+        return chimCustomRenderBathingInSkyrimState($state, $subject, $template);
+    }
+
+    return chimCustomRenderDirtAndBloodState($state, $subject, $template);
+}
+
 function chimCustomFindFreshSurvivalState(string $actorName, string $actorType = 'player'): ?array
 {
     foreach (['starfrost_survival', 'sunhelm_survival'] as $integrationId) {
@@ -799,18 +974,14 @@ function chimCustomBuildCurrentCharacterCleaninessBlock(string $npcName, string 
     }
 
     $actorType = strcasecmp($npcName, $playerName) === 0 ? 'player' : 'npc';
-    $row = chimCustomFindFreshActorState($npcName, $actorType);
-    if (!$row) {
-        return '';
+    foreach (chimCustomFindFreshCleaninessStates($npcName, $actorType) as $row) {
+        $line = chimCustomRenderCleaninessRow($row, 'You');
+        if ($line !== '') {
+            return "<cleaniness>\n{$line}\n</cleaniness>";
+        }
     }
 
-    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
-    $line = chimCustomRenderDirtAndBloodState($state, 'You', (string) (($row['integration']['prompt_template'] ?? '') ?: ''));
-    if ($line === '') {
-        return '';
-    }
-
-    return "<cleaniness>\n{$line}\n</cleaniness>";
+    return '';
 }
 
 function chimCustomBuildCurrentCharacterSurvivalBlock(string $npcName, string $playerName): string
@@ -835,18 +1006,14 @@ function chimCustomBuildCurrentCharacterSurvivalBlock(string $npcName, string $p
 
 function chimCustomActorProfileCleaniness(string $actorName, string $actorType, array $context = []): string
 {
-    $row = chimCustomFindFreshActorState($actorName, $actorType);
-    if (!$row) {
-        return '';
+    foreach (chimCustomFindFreshCleaninessStates($actorName, $actorType) as $row) {
+        $description = chimCustomDescribeCleaninessRow($row);
+        if ($description !== '') {
+            return 'Cleaniness: ' . $description;
+        }
     }
 
-    $state = is_array($row['state'] ?? null) ? $row['state'] : [];
-    $description = chimCustomDescribeDirtAndBloodState($state);
-    if ($description === '') {
-        return '';
-    }
-
-    return 'Cleaniness: ' . $description;
+    return '';
 }
 
 function chimCustomActorProfileSurvival(string $actorName, string $actorType, array $context = []): string

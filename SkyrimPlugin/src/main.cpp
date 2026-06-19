@@ -29,8 +29,9 @@
 namespace
 {
     constexpr const char* kPluginId = "CHIM-Custom";
-    constexpr const char* kPluginVersion = "0.3.0";
+    constexpr const char* kPluginVersion = "0.4.0";
     constexpr const char* kDirtAndBloodPlugin = "Dirt and Blood - Dynamic Visuals.esp";
+    constexpr const char* kBathingInSkyrimPlugin = "Bathing in Skyrim.esp";
     constexpr const char* kSunHelmPlugin = "SunHelmSurvival.esp";
     constexpr const char* kStarfrostPlugin = "Starfrost.esp";
     constexpr const char* kSurvivalModePlugin = "ccQDRSSE001-SurvivalMode.esl";
@@ -52,6 +53,15 @@ namespace
         int bloodLevel{0};
         bool isClean{false};
         bool isWashing{false};
+    };
+
+    struct BathingInSkyrimState
+    {
+        bool available{false};
+        bool enabled{false};
+        int dirtinessTier{0};
+        bool isBathing{false};
+        bool isSoapy{false};
     };
 
     struct SunHelmState
@@ -428,6 +438,49 @@ namespace
         return state;
     }
 
+    BathingInSkyrimState ReadBathingInSkyrimState(RE::Actor* actor)
+    {
+        BathingInSkyrimState state;
+        if (!actor) {
+            return state;
+        }
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            return state;
+        }
+
+        auto* enabledGlobal = LookupGlobal(dataHandler, 0x00000C, kBathingInSkyrimPlugin);
+        std::vector<RE::SpellItem*> tierSpells = {
+            LookupPluginSpell(dataHandler, 0x000043, kBathingInSkyrimPlugin),
+            LookupPluginSpell(dataHandler, 0x000044, kBathingInSkyrimPlugin),
+            LookupPluginSpell(dataHandler, 0x000045, kBathingInSkyrimPlugin),
+            LookupPluginSpell(dataHandler, 0x000046, kBathingInSkyrimPlugin),
+            LookupPluginSpell(dataHandler, 0x00006D, kBathingInSkyrimPlugin),
+        };
+        auto* bathingSpell = LookupPluginSpell(dataHandler, 0x00003D, kBathingInSkyrimPlugin);
+        auto* soapySpell = LookupPluginSpell(dataHandler, 0x000039, kBathingInSkyrimPlugin);
+        auto* soapyAnimatedSpell = LookupPluginSpell(dataHandler, 0x00003B, kBathingInSkyrimPlugin);
+
+        state.available = enabledGlobal || bathingSpell || soapySpell || soapyAnimatedSpell;
+        for (auto* spell : tierSpells) {
+            state.available = state.available || spell;
+        }
+        if (!state.available) {
+            return state;
+        }
+
+        state.enabled = GlobalEnabled(enabledGlobal, true);
+        for (std::size_t i = 0; i < tierSpells.size(); ++i) {
+            if (ActorHasSpell(actor, tierSpells[i])) {
+                state.dirtinessTier = static_cast<int>(i);
+            }
+        }
+        state.isBathing = ActorHasSpell(actor, bathingSpell);
+        state.isSoapy = ActorHasSpell(actor, soapySpell) || ActorHasSpell(actor, soapyAnimatedSpell);
+        return state;
+    }
+
     SunHelmState ReadSunHelmState()
     {
         SunHelmState state;
@@ -553,6 +606,40 @@ namespace
         return body.str();
     }
 
+    std::string BuildBathingInSkyrimStatePayload(RE::PlayerCharacter* player, const BathingInSkyrimState& state)
+    {
+        std::string playerName = "Player";
+        if (player && player->GetDisplayFullName() && player->GetDisplayFullName()[0]) {
+            playerName = player->GetDisplayFullName();
+        }
+
+        std::ostringstream body;
+        body << "{";
+        body << "\"plugin_id\":\"" << kPluginId << "\",";
+        body << "\"plugin_version\":\"" << kPluginVersion << "\",";
+        body << "\"game_version\":\"skyrim\",";
+        body << "\"states\":[";
+        body << "{";
+        body << "\"integration_id\":\"bathing_in_skyrim\",";
+        body << "\"actor_name\":\"" << JsonEscape(playerName) << "\",";
+        body << "\"actor_type\":\"player\",";
+        body << "\"runtime_formid\":\"" << FormIdHex(player ? player->GetFormID() : 0) << "\",";
+        body << "\"gamets\":0,";
+        body << "\"state\":{";
+        body << "\"source_mod\":\"" << kBathingInSkyrimPlugin << "\",";
+        body << "\"enabled\":" << (state.enabled ? "true" : "false") << ",";
+        body << "\"dirtiness_tier\":" << state.dirtinessTier << ",";
+        body << "\"is_dirty\":" << (state.dirtinessTier >= 2 ? "true" : "false") << ",";
+        body << "\"is_very_dirty\":" << (state.dirtinessTier >= 3 ? "true" : "false") << ",";
+        body << "\"is_bathing\":" << (state.isBathing ? "true" : "false") << ",";
+        body << "\"is_soapy\":" << (state.isSoapy ? "true" : "false");
+        body << "}";
+        body << "}";
+        body << "]";
+        body << "}";
+        return body.str();
+    }
+
     std::string BuildSunHelmStatePayload(RE::PlayerCharacter* player, const SunHelmState& state)
     {
         std::string playerName = "Player";
@@ -640,12 +727,15 @@ namespace
     void MonitorLoop()
     {
         bool dirtAndBloodEnabled = true;
+        bool bathingInSkyrimEnabled = true;
         bool sunHelmEnabled = true;
         bool starfrostEnabled = true;
         bool loggedDirtAndBloodAvailable = false;
+        bool loggedBathingInSkyrimAvailable = false;
         bool loggedSunHelmAvailable = false;
         bool loggedStarfrostAvailable = false;
         std::string lastDirtAndBloodHash;
+        std::string lastBathingInSkyrimHash;
         std::string lastSunHelmHash;
         std::string lastStarfrostHash;
         auto nextConfigRefresh = std::chrono::steady_clock::now();
@@ -659,6 +749,7 @@ namespace
                 std::string configResponse;
                 if (HttpRequest(settings, "GET", settings.configPath, "", &configResponse)) {
                     dirtAndBloodEnabled = ParseIntegrationEnabled(configResponse, "dirt_and_blood");
+                    bathingInSkyrimEnabled = ParseIntegrationEnabled(configResponse, "bathing_in_skyrim");
                     sunHelmEnabled = ParseIntegrationEnabled(configResponse, "sunhelm_survival");
                     starfrostEnabled = ParseIntegrationEnabled(configResponse, "starfrost_survival");
                 }
@@ -687,6 +778,27 @@ namespace
                     if (hash != lastDirtAndBloodHash) {
                         lastDirtAndBloodHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildStatePayload(player, state), nullptr);
+                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                    }
+                }
+            }
+
+            if (player && bathingInSkyrimEnabled) {
+                BathingInSkyrimState state = ReadBathingInSkyrimState(player);
+                if (state.available) {
+                    if (!loggedBathingInSkyrimAvailable) {
+                        logger::info("[CHIM-Custom] Bathing in Skyrim detected");
+                        loggedBathingInSkyrimAvailable = true;
+                    }
+
+                    std::string hash = std::string(state.enabled ? "1" : "0") + "|" +
+                        std::to_string(state.dirtinessTier) + "|" +
+                        (state.isBathing ? "1" : "0") + "|" +
+                        (state.isSoapy ? "1" : "0");
+
+                    if (hash != lastBathingInSkyrimHash) {
+                        lastBathingInSkyrimHash = hash;
+                        HttpRequest(settings, "POST", settings.statePath, BuildBathingInSkyrimStatePayload(player, state), nullptr);
                         nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
                     }
                 }

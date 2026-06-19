@@ -10,6 +10,7 @@ This package is split into two pieces:
 Supported integrations:
 
 - Dirt and Blood - Dynamic Visual Effects: player dirt, blood, clean, and washing state.
+- Bathing in Skyrim - Renewed: player dirtiness tier, bathing, and soapy state.
 - SunHelm Survival: player hunger, thirst, exhaustion, and cold state.
 - Starfrost - A Survival Overhaul: player hunger, exhaustion, and cold state through Starfrost and Survival Mode Improved.
 
