@@ -756,10 +756,8 @@ namespace
                 nextConfigRefresh = now + std::chrono::seconds(60);
             }
 
-            if (now >= nextHeartbeatPost) {
-                HttpRequest(settings, "POST", settings.statePath, BuildHeartbeatPayload(), nullptr);
-                nextHeartbeatPost = now + std::chrono::seconds(60);
-            }
+            bool heartbeatDue = now >= nextHeartbeatPost;
+            bool postedStateThisCycle = false;
 
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player && dirtAndBloodEnabled) {
@@ -775,10 +773,10 @@ namespace
                         (state.isClean ? "1" : "0") + "|" +
                         (state.isWashing ? "1" : "0");
 
-                    if (hash != lastDirtAndBloodHash) {
+                    if (hash != lastDirtAndBloodHash || heartbeatDue) {
                         lastDirtAndBloodHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildStatePayload(player, state), nullptr);
-                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                        postedStateThisCycle = true;
                     }
                 }
             }
@@ -796,10 +794,10 @@ namespace
                         (state.isBathing ? "1" : "0") + "|" +
                         (state.isSoapy ? "1" : "0");
 
-                    if (hash != lastBathingInSkyrimHash) {
+                    if (hash != lastBathingInSkyrimHash || heartbeatDue) {
                         lastBathingInSkyrimHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildBathingInSkyrimStatePayload(player, state), nullptr);
-                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                        postedStateThisCycle = true;
                     }
                 }
             }
@@ -822,10 +820,10 @@ namespace
                         std::to_string(state.exhaustionLevel) + "|" +
                         std::to_string(state.coldLevel);
 
-                    if (hash != lastSunHelmHash) {
+                    if (hash != lastSunHelmHash || heartbeatDue) {
                         lastSunHelmHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildSunHelmStatePayload(player, state), nullptr);
-                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                        postedStateThisCycle = true;
                     }
                 }
             }
@@ -846,12 +844,21 @@ namespace
                         std::to_string(state.exhaustionLevel) + "|" +
                         std::to_string(state.coldLevel);
 
-                    if (hash != lastStarfrostHash) {
+                    if (hash != lastStarfrostHash || heartbeatDue) {
                         lastStarfrostHash = hash;
                         HttpRequest(settings, "POST", settings.statePath, BuildStarfrostStatePayload(player, state), nullptr);
-                        nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                        postedStateThisCycle = true;
                     }
                 }
+            }
+
+            if (heartbeatDue) {
+                if (!postedStateThisCycle) {
+                    HttpRequest(settings, "POST", settings.statePath, BuildHeartbeatPayload(), nullptr);
+                }
+                nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            } else if (postedStateThisCycle) {
+                nextHeartbeatPost = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             }
 
             int sleepSeconds = std::max(2, settings.pollSeconds);

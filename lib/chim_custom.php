@@ -2,6 +2,7 @@
 
 const CHIM_CUSTOM_VERSION = '0.4.1';
 const CHIM_CUSTOM_DEFAULT_STALE_SECONDS = 180;
+const CHIM_CUSTOM_SCHEMA = 'plugins';
 
 function chimCustomDefaultIntegrations(): array
 {
@@ -42,6 +43,12 @@ function chimCustomDefaultIntegrations(): array
                     'bathing' => '00003D',
                     'soapy' => '000039',
                     'soapy_animated' => '00003B',
+                ],
+                'events' => [
+                    'cleaned_up' => [
+                        'enabled' => true,
+                        'cooldown_seconds' => 300,
+                    ],
                 ],
             ],
         ],
@@ -102,7 +109,7 @@ function chimCustomDbReady(): bool
     }
 
     try {
-        $row = $db->fetchOne("SELECT to_regclass('public.chim_custom_integrations') AS table_name");
+        $row = $db->fetchOne("SELECT to_regclass('plugins.chim_custom_integrations') AS table_name");
         return is_array($row) && !empty($row['table_name']);
     } catch (Throwable $e) {
         return false;
@@ -121,7 +128,31 @@ function chimCustomToBool($value): bool
         return $value;
     }
     $value = strtolower(trim((string) $value));
-    return in_array($value, ['1', 'true', 'yes', 'on', 'enabled'], true);
+    return in_array($value, ['1', 't', 'true', 'yes', 'y', 'on', 'enabled'], true);
+}
+
+function chimCustomArrayIsList(array $value): bool
+{
+    if ($value === []) {
+        return true;
+    }
+    return array_keys($value) === range(0, count($value) - 1);
+}
+
+function chimCustomMergeDefaultNativeConfig(array $current, array $defaults): array
+{
+    foreach ($defaults as $key => $defaultValue) {
+        if (!array_key_exists($key, $current)) {
+            $current[$key] = $defaultValue;
+            continue;
+        }
+
+        if (is_array($defaultValue) && is_array($current[$key] ?? null) && !chimCustomArrayIsList($defaultValue)) {
+            $current[$key] = chimCustomMergeDefaultNativeConfig($current[$key], $defaultValue);
+        }
+    }
+
+    return $current;
 }
 
 function chimCustomEnsureDefaults(): void
@@ -140,7 +171,7 @@ function chimCustomEnsureDefaults(): void
         $enabled = $integration['enabled'] ? 'TRUE' : 'FALSE';
 
         $db->execQuery("
-            INSERT INTO public.chim_custom_integrations (
+            INSERT INTO plugins.chim_custom_integrations (
                 integration_id,
                 display_name,
                 description,
@@ -156,6 +187,29 @@ function chimCustomEnsureDefaults(): void
                 {$config}::jsonb
             ) ON CONFLICT (integration_id) DO NOTHING
         ");
+
+        $row = $db->fetchOne("
+            SELECT native_config
+            FROM plugins.chim_custom_integrations
+            WHERE integration_id = '{$id}'
+            LIMIT 1
+        ");
+        $currentConfig = [];
+        if (is_array($row) && isset($row['native_config'])) {
+            $decoded = is_string($row['native_config']) ? json_decode($row['native_config'], true) : $row['native_config'];
+            $currentConfig = is_array($decoded) ? $decoded : [];
+        }
+
+        $mergedConfig = chimCustomMergeDefaultNativeConfig($currentConfig, $integration['native_config']);
+        if ($mergedConfig !== $currentConfig) {
+            $mergedConfigSql = $db->escapeLiteral(chimCustomJsonEncode($mergedConfig));
+            $db->execQuery("
+                UPDATE plugins.chim_custom_integrations
+                SET native_config = {$mergedConfigSql}::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE integration_id = '{$id}'
+            ");
+        }
     }
 }
 
@@ -169,7 +223,7 @@ function chimCustomGetIntegrations(): array
     chimCustomEnsureDefaults();
     $rows = $db->fetchAll("
         SELECT integration_id, display_name, description, enabled, prompt_template, native_config, updated_at
-        FROM public.chim_custom_integrations
+        FROM plugins.chim_custom_integrations
         ORDER BY display_name ASC
     ");
 
@@ -198,21 +252,43 @@ function chimCustomGetIntegration(string $integrationId): ?array
     return null;
 }
 
-function chimCustomSetIntegrationSettings(string $integrationId, bool $enabled, string $promptTemplate): bool
+function chimCustomSetIntegrationSettings(string $integrationId, bool $enabled, string $promptTemplate, array $eventEnabledByKey = []): bool
 {
     global $db;
     if (!chimCustomDbReady()) {
         return false;
     }
 
+    $integration = chimCustomGetIntegration($integrationId);
+    if (!$integration) {
+        return false;
+    }
+
+    $nativeConfig = is_array($integration['native_config'] ?? null) ? $integration['native_config'] : [];
+    foreach ($eventEnabledByKey as $eventKey => $eventEnabled) {
+        $eventKey = trim((string) $eventKey);
+        if ($eventKey === '') {
+            continue;
+        }
+        if (!isset($nativeConfig['events']) || !is_array($nativeConfig['events'])) {
+            $nativeConfig['events'] = [];
+        }
+        if (!isset($nativeConfig['events'][$eventKey]) || !is_array($nativeConfig['events'][$eventKey])) {
+            $nativeConfig['events'][$eventKey] = [];
+        }
+        $nativeConfig['events'][$eventKey]['enabled'] = (bool) $eventEnabled;
+    }
+
     $id = $db->escape($integrationId);
     $prompt = $db->escape($promptTemplate);
     $enabledSql = $enabled ? 'TRUE' : 'FALSE';
+    $nativeConfigSql = $db->escapeLiteral(chimCustomJsonEncode($nativeConfig));
 
     $db->execQuery("
-        UPDATE public.chim_custom_integrations
+        UPDATE plugins.chim_custom_integrations
         SET enabled = {$enabledSql},
             prompt_template = '{$prompt}',
+            native_config = {$nativeConfigSql}::jsonb,
             updated_at = CURRENT_TIMESTAMP
         WHERE integration_id = '{$id}'
     ");
@@ -316,11 +392,17 @@ function chimCustomSanitizeBathingInSkyrimState(array $state): array
 
 function chimCustomSanitizeSunHelmState(array $state): array
 {
-    $enabled = !empty($state['enabled']);
-    $hungerEnabled = $enabled && !empty($state['hunger_enabled']);
-    $thirstEnabled = $enabled && !empty($state['thirst_enabled']);
-    $exhaustionEnabled = $enabled && !empty($state['exhaustion_enabled']);
-    $coldEnabled = $enabled && !empty($state['cold_enabled']);
+    $hungerLevel = chimCustomClampNeedLevel($state['hunger_level'] ?? 0);
+    $thirstLevel = chimCustomClampNeedLevel($state['thirst_level'] ?? 0);
+    $exhaustionLevel = chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0);
+    $coldLevel = chimCustomClampNeedLevel($state['cold_level'] ?? 0);
+    $hasActiveNeed = $hungerLevel >= 2 || $thirstLevel >= 2 || $exhaustionLevel >= 2 || $coldLevel >= 2;
+
+    $enabled = !empty($state['enabled']) || $hasActiveNeed;
+    $hungerEnabled = ($enabled && !empty($state['hunger_enabled'])) || $hungerLevel >= 2;
+    $thirstEnabled = ($enabled && !empty($state['thirst_enabled'])) || $thirstLevel >= 2;
+    $exhaustionEnabled = ($enabled && !empty($state['exhaustion_enabled'])) || $exhaustionLevel >= 2;
+    $coldEnabled = ($enabled && !empty($state['cold_enabled'])) || $coldLevel >= 2;
 
     return [
         'enabled' => $enabled,
@@ -328,31 +410,241 @@ function chimCustomSanitizeSunHelmState(array $state): array
         'thirst_enabled' => $thirstEnabled,
         'exhaustion_enabled' => $exhaustionEnabled,
         'cold_enabled' => $coldEnabled,
-        'hunger_level' => chimCustomClampNeedLevel($state['hunger_level'] ?? 0),
-        'thirst_level' => chimCustomClampNeedLevel($state['thirst_level'] ?? 0),
-        'exhaustion_level' => chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0),
-        'cold_level' => chimCustomClampNeedLevel($state['cold_level'] ?? 0),
+        'hunger_level' => $hungerLevel,
+        'thirst_level' => $thirstLevel,
+        'exhaustion_level' => $exhaustionLevel,
+        'cold_level' => $coldLevel,
         'source_mod' => trim((string) ($state['source_mod'] ?? 'SunHelmSurvival.esp')),
     ];
 }
 
 function chimCustomSanitizeStarfrostState(array $state): array
 {
-    $enabled = !empty($state['enabled']);
-    $hungerEnabled = $enabled && !empty($state['hunger_enabled']);
-    $exhaustionEnabled = $enabled && !empty($state['exhaustion_enabled']);
-    $coldEnabled = $enabled && !empty($state['cold_enabled']);
+    $hungerLevel = max(0, min(3, intval(round(floatval($state['hunger_level'] ?? 0)))));
+    $exhaustionLevel = chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0);
+    $coldLevel = chimCustomClampNeedLevel($state['cold_level'] ?? 0);
+    $hasActiveNeed = $hungerLevel >= 1 || $exhaustionLevel >= 3 || $coldLevel >= 3;
+
+    $enabled = !empty($state['enabled']) || $hasActiveNeed;
+    $hungerEnabled = ($enabled && !empty($state['hunger_enabled'])) || $hungerLevel >= 1;
+    $exhaustionEnabled = ($enabled && !empty($state['exhaustion_enabled'])) || $exhaustionLevel >= 3;
+    $coldEnabled = ($enabled && !empty($state['cold_enabled'])) || $coldLevel >= 3;
 
     return [
         'enabled' => $enabled,
         'hunger_enabled' => $hungerEnabled,
         'exhaustion_enabled' => $exhaustionEnabled,
         'cold_enabled' => $coldEnabled,
-        'hunger_level' => max(0, min(3, intval(round(floatval($state['hunger_level'] ?? 0))))),
-        'exhaustion_level' => chimCustomClampNeedLevel($state['exhaustion_level'] ?? 0),
-        'cold_level' => chimCustomClampNeedLevel($state['cold_level'] ?? 0),
+        'hunger_level' => $hungerLevel,
+        'exhaustion_level' => $exhaustionLevel,
+        'cold_level' => $coldLevel,
         'source_mod' => trim((string) ($state['source_mod'] ?? 'Starfrost.esp')),
     ];
+}
+
+function chimCustomGetStoredActorState(string $actorKey, string $integrationId): ?array
+{
+    global $db;
+    if (!chimCustomDbReady()) {
+        return null;
+    }
+
+    $actorKeySql = $db->escape($actorKey);
+    $integrationSql = $db->escape($integrationId);
+    $row = $db->fetchOne("
+        SELECT actor_key, actor_name, actor_type, integration_id, state, gamets, updated_at
+        FROM plugins.chim_custom_actor_state
+        WHERE actor_key = '{$actorKeySql}'
+          AND integration_id = '{$integrationSql}'
+        LIMIT 1
+    ");
+
+    if (!is_array($row) || empty($row)) {
+        return null;
+    }
+
+    if (is_string($row['state'] ?? null)) {
+        $decoded = json_decode($row['state'], true);
+        $row['state'] = is_array($decoded) ? $decoded : [];
+    }
+
+    return $row;
+}
+
+function chimCustomLatestEventContextValue(string $column): string
+{
+    global $db;
+    if (!in_array($column, ['people', 'location', 'party'], true)) {
+        return '';
+    }
+
+    $row = $db->fetchOne("
+        SELECT {$column}
+        FROM public.eventlog
+        WHERE NULLIF(TRIM({$column}), '') IS NOT NULL
+        ORDER BY gamets DESC, ts DESC, rowid DESC
+        LIMIT 1
+    ");
+
+    return is_array($row) ? trim((string) ($row[$column] ?? '')) : '';
+}
+
+function chimCustomLatestEventClock(int $payloadGamets = 0): array
+{
+    global $db;
+    $row = $db->fetchOne("
+        SELECT COALESCE(MAX(gamets), 0) AS gamets,
+               COALESCE(MAX(ts), 0) AS ts
+        FROM public.eventlog
+    ");
+
+    $gamets = $payloadGamets > 0 ? $payloadGamets : intval($row['gamets'] ?? 0);
+    $ts = intval($row['ts'] ?? 0) + 1;
+    return ['gamets' => $gamets, 'ts' => $ts > 0 ? $ts : time()];
+}
+
+function chimCustomBuildEventPeople(string $actorName): string
+{
+    $people = chimCustomLatestEventContextValue('people');
+    $actorName = trim($actorName);
+    if ($actorName === '') {
+        return $people;
+    }
+
+    $parts = array_filter(array_map('trim', preg_split('/[|\/]/', $people) ?: []));
+    foreach ($parts as $part) {
+        if (strcasecmp($part, $actorName) === 0) {
+            return $people !== '' ? $people : $actorName;
+        }
+    }
+
+    $parts[] = $actorName;
+    return implode('|', array_values(array_unique($parts)));
+}
+
+function chimCustomIntegrationEventEnabled(array $integration, string $eventKey): bool
+{
+    $nativeConfig = is_array($integration['native_config'] ?? null) ? $integration['native_config'] : [];
+    $eventConfig = $nativeConfig['events'][$eventKey] ?? [];
+    if (is_array($eventConfig) && array_key_exists('enabled', $eventConfig)) {
+        return chimCustomToBool($eventConfig['enabled']);
+    }
+    return true;
+}
+
+function chimCustomIntegrationEventCooldownSeconds(array $integration, string $eventKey, int $default = 300): int
+{
+    $nativeConfig = is_array($integration['native_config'] ?? null) ? $integration['native_config'] : [];
+    $eventConfig = $nativeConfig['events'][$eventKey] ?? [];
+    $seconds = is_array($eventConfig) && isset($eventConfig['cooldown_seconds'])
+        ? intval($eventConfig['cooldown_seconds'])
+        : $default;
+    return max(0, $seconds);
+}
+
+function chimCustomPluginEventCooldownAllows(string $pluginId, string $eventText, string $eventType, int $cooldownSeconds): bool
+{
+    global $db;
+    if ($cooldownSeconds <= 0) {
+        return true;
+    }
+
+    $pluginSql = $db->escape($pluginId);
+    $eventTextSql = $db->escape($eventText);
+    $eventTypeSql = $db->escape($eventType);
+    $row = $db->fetchOne("
+        SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - to_timestamp(localts))) AS age_seconds
+        FROM public.eventlog
+        WHERE sess = '{$pluginSql}'
+          AND type = '{$eventTypeSql}'
+          AND data = '{$eventTextSql}'
+        ORDER BY rowid DESC
+        LIMIT 1
+    ");
+
+    if (!is_array($row) || empty($row)) {
+        return true;
+    }
+
+    return floatval($row['age_seconds'] ?? 0) >= $cooldownSeconds;
+}
+
+function chimCustomEmitEvent(array $event): bool
+{
+    global $db;
+    if (!chimCustomDbReady()) {
+        return false;
+    }
+
+    $pluginId = trim((string) ($event['plugin_id'] ?? 'CHIM-Custom'));
+    $integrationId = trim((string) ($event['integration_id'] ?? ''));
+    $actorKey = trim((string) ($event['actor_key'] ?? ''));
+    $eventKey = trim((string) ($event['event_key'] ?? ''));
+    $text = trim((string) ($event['text'] ?? ''));
+    if ($pluginId === '' || $eventKey === '' || $text === '') {
+        return false;
+    }
+
+    $cooldownSeconds = max(0, intval($event['cooldown_seconds'] ?? 300));
+    $eventType = trim((string) ($event['type'] ?? 'custom_mod_event'));
+    if (!chimCustomPluginEventCooldownAllows($pluginId, $text, $eventType, $cooldownSeconds)) {
+        return false;
+    }
+
+    $actorName = trim((string) ($event['actor_name'] ?? ''));
+    $clock = chimCustomLatestEventClock(intval($event['gamets'] ?? 0));
+    $db->insert('eventlog', [
+        'ts' => $clock['ts'],
+        'gamets' => $clock['gamets'],
+        'type' => $eventType,
+        'data' => $text,
+        'sess' => $pluginId,
+        'localts' => time(),
+        'people' => trim((string) ($event['people'] ?? '')) ?: chimCustomBuildEventPeople($actorName),
+        'location' => trim((string) ($event['location'] ?? '')) ?: chimCustomLatestEventContextValue('location'),
+        'party' => trim((string) ($event['party'] ?? '')) ?: chimCustomLatestEventContextValue('party'),
+    ]);
+
+    return true;
+}
+
+function chimCustomMaybeEmitBathingEvents(string $actorKey, string $actorName, string $actorType, ?array $previousRow, array $state, int $gamets, array $integration): void
+{
+    if (!$previousRow || !chimCustomIntegrationEventEnabled($integration, 'cleaned_up')) {
+        return;
+    }
+
+    $previousState = is_array($previousRow['state'] ?? null) ? $previousRow['state'] : [];
+    $previousTier = chimCustomClampBathingTier($previousState['dirtiness_tier'] ?? 0);
+    $currentTier = chimCustomClampBathingTier($state['dirtiness_tier'] ?? 0);
+    $wasDirty = !empty($previousState['enabled']) && $previousTier >= 2;
+    $isCleanNow = !empty($state['enabled']) && $currentTier <= 1;
+    $finishedBathing = !empty($previousState['is_bathing']) && empty($state['is_bathing']);
+
+    if (!$wasDirty || !$isCleanNow || (!empty($state['is_bathing']) && !$finishedBathing)) {
+        return;
+    }
+
+    $actor = trim($actorName) !== '' ? trim($actorName) : 'The player';
+    chimCustomEmitEvent([
+        'plugin_id' => 'CHIM-Custom',
+        'integration_id' => 'bathing_in_skyrim',
+        'actor_key' => $actorKey,
+        'actor_name' => $actorName,
+        'actor_type' => $actorType,
+        'event_key' => 'cleaned_up',
+        'type' => 'custom_mod_event',
+        'text' => "{$actor} washed up and is now clean.",
+        'gamets' => $gamets,
+        'cooldown_seconds' => chimCustomIntegrationEventCooldownSeconds($integration, 'cleaned_up', 300),
+    ]);
+}
+
+function chimCustomMaybeEmitStateEvents(string $integrationId, string $actorKey, string $actorName, string $actorType, ?array $previousRow, array $state, int $gamets, array $integration): void
+{
+    if ($integrationId === 'bathing_in_skyrim') {
+        chimCustomMaybeEmitBathingEvents($actorKey, $actorName, $actorType, $previousRow, $state, $gamets, $integration);
+    }
 }
 
 function chimCustomUpsertActorState(array $payload): bool
@@ -387,6 +679,7 @@ function chimCustomUpsertActorState(array $payload): bool
 
     $actorKey = chimCustomActorKey($actorType, $actorName, (string) ($payload['runtime_formid'] ?? ''));
     $gamets = isset($payload['gamets']) && is_numeric($payload['gamets']) ? intval($payload['gamets']) : 0;
+    $previousRow = chimCustomGetStoredActorState($actorKey, $integrationId);
 
     $actorKeySql = $db->escape($actorKey);
     $actorNameSql = $db->escape($actorName);
@@ -395,7 +688,7 @@ function chimCustomUpsertActorState(array $payload): bool
     $stateJson = $db->escapeLiteral(chimCustomJsonEncode($state));
 
     $db->execQuery("
-        INSERT INTO public.chim_custom_actor_state (
+        INSERT INTO plugins.chim_custom_actor_state (
             actor_key,
             actor_name,
             actor_type,
@@ -419,6 +712,8 @@ function chimCustomUpsertActorState(array $payload): bool
             updated_at = CURRENT_TIMESTAMP
     ");
 
+    chimCustomMaybeEmitStateEvents($integrationId, $actorKey, $actorName, $actorType, $previousRow, $state, $gamets, $integration);
+
     return true;
 }
 
@@ -435,7 +730,7 @@ function chimCustomRecordHeartbeat(array $payload): void
     $payloadJson = $db->escapeLiteral(chimCustomJsonEncode($payload));
 
     $db->execQuery("
-        INSERT INTO public.chim_custom_plugin_heartbeat (
+        INSERT INTO plugins.chim_custom_plugin_heartbeat (
             plugin_id,
             plugin_version,
             game_version,
@@ -465,7 +760,7 @@ function chimCustomGetRecentStates(int $limit = 50): array
     $limit = max(1, min(200, $limit));
     $rows = $db->fetchAll("
         SELECT actor_key, actor_name, actor_type, integration_id, state, gamets, updated_at
-        FROM public.chim_custom_actor_state
+        FROM plugins.chim_custom_actor_state
         ORDER BY updated_at DESC
         LIMIT {$limit}
     ");
@@ -489,7 +784,7 @@ function chimCustomGetHeartbeat(): ?array
 
     $row = $db->fetchOne("
         SELECT plugin_id, plugin_version, game_version, last_payload, updated_at
-        FROM public.chim_custom_plugin_heartbeat
+        FROM plugins.chim_custom_plugin_heartbeat
         WHERE plugin_id = 'CHIM-Custom'
         LIMIT 1
     ");
@@ -878,7 +1173,7 @@ function chimCustomFindFreshSurvivalState(string $actorName, string $actorType =
 {
     foreach (['starfrost_survival', 'sunhelm_survival'] as $integrationId) {
         $row = chimCustomFindFreshActorState($actorName, $actorType, $integrationId);
-        if ($row) {
+        if ($row && chimCustomDescribeSurvivalState($row) !== '') {
             return $row;
         }
     }

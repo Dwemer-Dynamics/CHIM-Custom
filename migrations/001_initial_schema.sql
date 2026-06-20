@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS public.chim_custom_integrations (
+CREATE SCHEMA IF NOT EXISTS plugins;
+
+CREATE TABLE IF NOT EXISTS plugins.chim_custom_integrations (
     integration_id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -8,7 +10,7 @@ CREATE TABLE IF NOT EXISTS public.chim_custom_integrations (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS public.chim_custom_actor_state (
+CREATE TABLE IF NOT EXISTS plugins.chim_custom_actor_state (
     actor_key TEXT NOT NULL,
     actor_name TEXT NOT NULL,
     actor_type TEXT NOT NULL,
@@ -20,12 +22,12 @@ CREATE TABLE IF NOT EXISTS public.chim_custom_actor_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chim_custom_actor_state_integration
-    ON public.chim_custom_actor_state (integration_id);
+    ON plugins.chim_custom_actor_state (integration_id);
 
 CREATE INDEX IF NOT EXISTS idx_chim_custom_actor_state_updated
-    ON public.chim_custom_actor_state (updated_at DESC);
+    ON plugins.chim_custom_actor_state (updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS public.chim_custom_plugin_heartbeat (
+CREATE TABLE IF NOT EXISTS plugins.chim_custom_plugin_heartbeat (
     plugin_id TEXT PRIMARY KEY,
     plugin_version TEXT NOT NULL DEFAULT '',
     game_version TEXT NOT NULL DEFAULT '',
@@ -33,7 +35,7 @@ CREATE TABLE IF NOT EXISTS public.chim_custom_plugin_heartbeat (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO public.chim_custom_integrations (
+INSERT INTO plugins.chim_custom_integrations (
     integration_id,
     display_name,
     description,

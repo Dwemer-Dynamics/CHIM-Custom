@@ -1,10 +1,10 @@
 {
   "name": "CHIM-Custom",
-  "description": "Optional CHIM integrations for third-party Skyrim mods. Adds prompt-aware support without making those mods core CHIM dependencies.",
+  "description": "Adds support for popular Skyrim mods.",
   "config_url": "/HerikaServer/ext/CHIM-Custom/index.php",
   "config_url_target": "_blank",
   "git_repo": "Dwemer-Dynamics/CHIM-Custom",
-  "mod_download_url": "https://github.com/Dwemer-Dynamics/CHIM-Custom/releases/download/<version>/CHIM-Custom-Skyrim.zip",
+  "mod_download_url": "https://github.com/Dwemer-Dynamics/CHIM-Custom/releases/download/<version>/CHIM%20-%20Custom.zip",
   "default_channel": "main",
   "channels": {
     "main": {

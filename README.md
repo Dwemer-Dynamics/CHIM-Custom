@@ -29,6 +29,10 @@ All integrations are optional. If a supported mod is not loaded, `CHIMCustom.dll
 
 State is prompt-only by default. It is not written into event history.
 
+## Database
+
+CHIM creates a shared `plugins` PostgreSQL schema for server plugins. CHIM-Custom stores its tables under that schema using plugin-prefixed names, such as `plugins.chim_custom_integrations`. Future server plugin migrations should follow the same pattern and avoid creating plugin-owned tables in `public`.
+
 ## Release Packaging
 
 Server plugin release:
@@ -55,4 +59,4 @@ SKSE/Plugins/CHIMCustom.dll
 SKSE/Plugins/CHIMCustom.ini
 ```
 
-Upload the Skyrim package as `CHIM-Custom-Skyrim.zip`.
+Upload the Skyrim package as `CHIM - Custom.zip`.
