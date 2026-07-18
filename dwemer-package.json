@@ -1,0 +1,30 @@
+{
+  "schema_version": 3,
+  "package_id": "chim-custom",
+  "name": "CHIM Custom",
+  "version": "0.4.1",
+  "description": "CHIM server and SKSE integrations for supported Skyrim mods.",
+  "components": {
+    "server": {
+      "install_name": "CHIM-Custom",
+      "mutable_paths": []
+    },
+    "game": {
+      "mod_name": "CHIM Plugin - CHIM Custom",
+      "variants": {
+        "skyrim-se": "game/skyrim-se"
+      },
+      "mutable_paths": [
+        "SKSE/Plugins/CHIMCustom.ini"
+      ]
+    }
+  },
+  "compatibility": {
+    "servers": [
+      "HerikaServer"
+    ],
+    "games": [
+      "skyrim-se"
+    ]
+  }
+}

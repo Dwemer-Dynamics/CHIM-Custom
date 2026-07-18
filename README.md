@@ -35,6 +35,14 @@ CHIM creates a shared `plugins` PostgreSQL schema for server plugins. CHIM-Custo
 
 ## Release Packaging
 
+Unified CHIM package (server extension plus separate MO2 mod):
+
+```powershell
+.\scripts\build-dwpkg.ps1
+```
+
+The generated `.dwpkg` is uploaded through CHIM's Server Plugins page. DwemerDistro Launcher installs the game component as its own MO2 mod before HerikaServer activates the server component. The generated DLL remains a local/release artifact and is not committed to pull requests.
+
 Server plugin release:
 
 Package only the HerikaServer plugin files into a top-level `CHIM-Custom/` folder, then upload it as `CHIM-Custom.tar.gz`. The server plugin installer extracts this archive into `HerikaServer/ext/CHIM-Custom`.
