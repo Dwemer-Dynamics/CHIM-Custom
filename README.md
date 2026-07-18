@@ -35,13 +35,13 @@ CHIM creates a shared `plugins` PostgreSQL schema for server plugins. CHIM-Custo
 
 ## Release Packaging
 
-Unified CHIM package (server extension plus separate MO2 mod):
+Embed the server extension into the normal Skyrim mod package:
 
 ```powershell
 .\scripts\build-dwpkg.ps1
 ```
 
-The generated `.dwpkg` is uploaded through CHIM's Server Plugins page. DwemerDistro Launcher installs the game component as its own MO2 mod before HerikaServer activates the server component. The generated DLL remains a local/release artifact and is not committed to pull requests.
+The generated file is placed at `SkyrimPlugin/package/CHIM/server-plugins/CHIM-Custom/<version>.dwpkg`. CHIM detects it when a save loads and transfers it to HerikaServer automatically. The generated DLL and `.dwpkg` remain local release artifacts and are not committed to pull requests.
 
 Server plugin release:
 
@@ -65,6 +65,7 @@ Skyrim plugin release should include:
 ```text
 SKSE/Plugins/CHIMCustom.dll
 SKSE/Plugins/CHIMCustom.ini
+CHIM/server-plugins/CHIM-Custom/<version>.dwpkg
 ```
 
 Upload the Skyrim package as `CHIM - Custom.zip`.
