@@ -35,6 +35,22 @@ CHIM creates a shared `plugins` PostgreSQL schema for server plugins. CHIM-Custo
 
 ## Release Packaging
 
+Embed the server extension into the normal Skyrim mod package:
+
+```powershell
+.\scripts\build-dwpkg.ps1
+```
+
+The generated file is placed at `SkyrimPlugin/package/CHIM/server-plugins/CHIM-Custom/<version>.dwpkg`. CHIM detects it when a save loads and transfers it to HerikaServer automatically. The generated DLL and `.dwpkg` remain local release artifacts and are not committed to pull requests.
+
+After building `CHIMCustom.dll`, create the complete user-facing release archive with:
+
+```powershell
+.\scripts\build-release.ps1
+```
+
+This stages the game files, generates the matching server package, and writes `release/CHIM - Custom.zip` without modifying the source package directory.
+
 Server plugin release:
 
 Package only the HerikaServer plugin files into a top-level `CHIM-Custom/` folder, then upload it as `CHIM-Custom.tar.gz`. The server plugin installer extracts this archive into `HerikaServer/ext/CHIM-Custom`.
@@ -57,6 +73,7 @@ Skyrim plugin release should include:
 ```text
 SKSE/Plugins/CHIMCustom.dll
 SKSE/Plugins/CHIMCustom.ini
+CHIM/server-plugins/CHIM-Custom/<version>.dwpkg
 ```
 
 Upload the Skyrim package as `CHIM - Custom.zip`.

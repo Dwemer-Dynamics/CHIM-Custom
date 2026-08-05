@@ -1,5 +1,6 @@
 SkyrimPlugin/build/
 SkyrimPlugin/package/SKSE/Plugins/CHIMCustom.dll
+SkyrimPlugin/package/CHIM/server-plugins/
 release/
 *.exp
 *.ilk
