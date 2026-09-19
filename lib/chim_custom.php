@@ -647,6 +647,71 @@ function chimCustomMaybeEmitStateEvents(string $integrationId, string $actorKey,
     }
 }
 
+// Mirror sanitized live state onto an existing NPC without creating profile history.
+function chimCustomStoreNpcPluginState(string $integrationId, string $actorKey, string $actorName, string $actorType, array $state, int $gamets, string $runtimeFormId): void
+{
+    global $db;
+    static $supported = null;
+
+    try {
+        if ($supported === null) {
+            $supported = false;
+            $enginePath = (string) ($GLOBALS['ENGINE_PATH'] ?? '');
+            $classFile = rtrim($enginePath, '/\\') . '/lib/core/npc_master.class.php';
+            if (!class_exists('NpcMaster', false) && $enginePath !== '' && is_file($classFile)) {
+                require_once $classFile;
+            }
+            if (method_exists('NpcMaster', 'setPluginData')) {
+                $column = $db->fetchOne("SELECT 1 AS supported FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'core_npc_master'
+                    AND column_name = 'plugin_extended_data'");
+                $supported = !empty($column['supported']);
+            }
+        }
+        if (!$supported || !isset(chimCustomDefaultIntegrations()[$integrationId])) {
+            return;
+        }
+
+        $runtimeFormId = preg_replace('/^0x/i', '', trim($runtimeFormId));
+        if ($runtimeFormId !== '' && !preg_match('/^[0-9a-f]{1,8}$/iD', $runtimeFormId)) {
+            return;
+        }
+        $match = null;
+        if ($runtimeFormId !== '') {
+            $match = $db->fetchOne("SELECT min(id) AS id, count(*) AS matches FROM (SELECT id FROM core_npc_master
+                WHERE refid ~* '^(0x)?[0-9a-f]{1,8}$'
+                AND lower(lpad(regexp_replace(refid, '^0[xX]', ''), 8, '0')) = $1
+                LIMIT 2) candidates", [strtolower(str_pad($runtimeFormId, 8, '0', STR_PAD_LEFT))]);
+        }
+        if (!$match || (int) $match['matches'] === 0) {
+            // A name can bind an uninitialized profile, never override a conflicting FormID.
+            $match = $db->fetchOne("SELECT min(id) AS id, count(*) AS matches FROM (SELECT id FROM core_npc_master WHERE npc_name = $1
+                AND (refid IS NULL OR btrim(refid) = '') LIMIT 2) candidates", [$actorName]);
+        }
+        if ((int) ($match['matches'] ?? 0) !== 1) {
+            return;
+        }
+
+        $saved = (new NpcMaster())->setPluginData((int) $match['id'], 'chim_custom_' . $integrationId, [
+            'actor_key' => $actorKey,
+            'actor_name' => $actorName,
+            'actor_type' => $actorType,
+            'integration_id' => $integrationId,
+            'state' => (object) $state,
+            'gamets' => $gamets,
+            'updated_at' => gmdate('c'),
+        ]);
+        if (!$saved) {
+            throw new RuntimeException('npc_plugin_state_not_saved');
+        }
+    } catch (Throwable $e) {
+        // The live-state cache remains usable if the optional NPC mirror is unavailable.
+        if (class_exists('Logger')) {
+            Logger::warn('CHIM-Custom could not store NPC plugin state.');
+        }
+    }
+}
+
 function chimCustomUpsertActorState(array $payload): bool
 {
     global $db;
@@ -712,6 +777,7 @@ function chimCustomUpsertActorState(array $payload): bool
             updated_at = CURRENT_TIMESTAMP
     ");
 
+    chimCustomStoreNpcPluginState($integrationId, $actorKey, $actorName, $actorType, $state, $gamets, (string) ($payload['runtime_formid'] ?? ''));
     chimCustomMaybeEmitStateEvents($integrationId, $actorKey, $actorName, $actorType, $previousRow, $state, $gamets, $integration);
 
     return true;
