@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_CUSTOM_VERSION = '0.4.2';
+const CHIM_CUSTOM_VERSION = '0.4.3';
 const CHIM_CUSTOM_DEFAULT_STALE_SECONDS = 180;
 const CHIM_CUSTOM_SCHEMA = 'plugins';
 
