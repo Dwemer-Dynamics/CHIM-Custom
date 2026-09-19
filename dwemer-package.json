@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "name": "CHIM-Custom",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "CHIM server integrations for supported Skyrim mods.",
   "server": {
     "mutable_paths": []
